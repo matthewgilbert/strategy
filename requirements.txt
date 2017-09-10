@@ -1,0 +1,4 @@
+pandas
+numpy
+pandas_market_calendars >= 0.8
+mapping

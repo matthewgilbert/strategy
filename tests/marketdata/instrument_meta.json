@@ -1,0 +1,5 @@
+{
+  "ES": {"exchange": "CME", "instrument_type": "future", "multiplier": 50, "generics": ["ES1"]},
+  "TY": {"exchange": "CME", "instrument_type": "future", "multiplier": 1000, "generics": ["TY1"]},
+  "XIV": {"exchange": "NASDAQ", "instrument_type": "equity", "multiplier": 1}
+}
