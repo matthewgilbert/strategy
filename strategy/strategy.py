@@ -857,7 +857,7 @@ class Portfolio(metaclass=ABCMeta):
 
         return gnrc_notionals
 
-    def orders(trades):
+    def orders(self, trades):
         """
         Map to market tradeables on an exchange, e.g 2016TYZ -> ZN Dec 17
 
@@ -874,7 +874,7 @@ class Portfolio(metaclass=ABCMeta):
         trades = trades.copy()
         new_index = []
         for nm in trades.index:
-            new_index.append(self.exposures.to_tradeable(nm))
+            new_index.append(self._exposures.to_tradeable(nm))
 
         trades.index = new_index
         return trades
