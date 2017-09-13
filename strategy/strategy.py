@@ -7,6 +7,7 @@ import mapping as mp
 import json
 import functools
 import collections
+import datetime
 import re
 import warnings
 import pandas_market_calendars as mcal
@@ -445,7 +446,7 @@ class Portfolio(metaclass=ABCMeta):
     """
 
     def __init__(self, exposures, start_date, end_date,
-                 initial_capital=100000, risk_target=0.12):
+                 initial_capital=100000, get_calendar=None, holidays=None):
         """
         Parameters:
         -----------
@@ -453,18 +454,31 @@ class Portfolio(metaclass=ABCMeta):
             An Exposures instance containing the asset exposures for trading
             and backtesting
         start_date:
-            PASS
+            TODO
         end_date:
-            PASS
+            TODO
         initial_capital: float
             Starting capital for backtest
+        get_calendar: function
+            Map which takes an exchange name as a string and returns an
+            instance of a pandas_market_calendars.MarketCalendar. Default is
+            pandas_market_calendars.get_calendar
+        holidays: list
+            list of timezone aware pd.Timestamps used for holidays in addition
+            to exchange holidays associated with instruments
         """
 
         self._exposures = exposures
 
+        if get_calendar is None:
+            get_calendar = mcal.get_calendar
+
         calendars = []
         for exchange in self._exposures.meta_data.loc["exchange"].unique():
-            calendars.append(mcal.get_calendar(exchange))
+            calendars.append(get_calendar(exchange))
+
+        if holidays:
+            calendars.append(_AdhocExchangeCalendar(holidays))
 
         self._start_date = start_date
         self._end_date = end_date
@@ -629,17 +643,23 @@ class Portfolio(metaclass=ABCMeta):
             irets[ast] = (self._exposures.prices[ast].settle
                           .groupby(level=1).pct_change())
 
-        weights = self.instrument_weights()
-        futures_crets = mp.util.calc_rets(irets, weights)
+        if irets:
+            weights = self.instrument_weights()
+            futures_crets = mp.util.calc_rets(irets, weights)
+        else:
+            futures_crets = None
 
         eprices = []
         equities = self._exposures.equities
         for ast in equities:
             eprices.append(self._exposures.prices[ast].adj_close)
 
-        eprices = pd.concat(eprices, axis=1)
-        eprices.columns = equities
-        equity_rets = eprices.pct_change()
+        if eprices:
+            eprices = pd.concat(eprices, axis=1)
+            eprices.columns = equities
+            equity_rets = eprices.pct_change()
+        else:
+            equity_rets = None
 
         crets = pd.concat([futures_crets, equity_rets], axis=1)
         crets = crets.sort_index(axis=1)
@@ -878,3 +898,40 @@ class Portfolio(metaclass=ABCMeta):
 
         trades.index = new_index
         return trades
+
+
+class _AdhocExchangeCalendar(mcal.MarketCalendar):
+    """
+    Dummy exchange calendar for storing adhoc holidays not associated with any
+    particular exchange
+    """
+
+    def __init__(self, adhoc_holidays, *args, **kwargs):
+        # adhoc_holidays should be a list-like of pandas.Timestamps for
+        # holidays
+        super(_AdhocExchangeCalendar, self).__init__(*args, **kwargs)
+        self._adhoc_holidays = tuple(adhoc_holidays)
+
+    @property
+    def name(self):
+        return "Adhoc"
+
+    @property
+    def tz(self):
+        return "UTC"
+
+    @property
+    def adhoc_holidays(self):
+        return list(self._adhoc_holidays)
+
+    @property
+    def regular_holidays(self):
+        return AbstractHolidayCalendar()
+
+    @property
+    def open_time(self):
+        return datetime.time(17, 1)
+
+    @property
+    def close_time(self):
+        return datetime.time(17)
