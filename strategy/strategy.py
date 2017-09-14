@@ -375,7 +375,7 @@ class Exposures():
         return (prices, expiries)
 
     @staticmethod
-    def read_futures(folder):
+    def read_futures(folder, columns=["Settle"]):
         """
         Read futures instrument prices.
 
@@ -385,6 +385,8 @@ class Exposures():
             A folder containing csv files of individual futures instruments
             prices. Should contain the column Settle and file names should have
             format [A-Z]{3}[1-9][0-9]{3}.csv, e.g "ESU2007.csv"
+        columns: list
+            Columns to return from parsed csv files
 
         Returns:
         --------
@@ -407,7 +409,7 @@ class Exposures():
                              "properly named:\n{0}".format(bad_files))
 
         p = mp.util.read_price_data(files, name_func)
-        p = p.loc[:, ["Settle"]]
+        p = p.loc[:, columns]
         p.columns = [col.lower().replace(" ", "_") for col in p.columns]
         return p
 
