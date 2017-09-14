@@ -740,6 +740,8 @@ class Portfolio(metaclass=ABCMeta):
                     # calculate generic notional trades
                     trd_dt = new_exp - current_exp
                     current_exp = new_exp
+                    crnt_instrs = trds.add(crnt_instrs, fill_value=0)
+                    crnt_instrs = crnt_instrs.loc[crnt_instrs != 0]
                 else:
                     trd_dt = (signal.loc[dt] * capital * risk_target -
                               current_exp)
@@ -804,12 +806,14 @@ class Portfolio(metaclass=ABCMeta):
         ddh_fut, ddh_eqt = self._split_and_check_generics(dollar_desired_hlds)
         price_fut, price_eqt = self._split_and_check_instruments(prices)
         # to support passing 0 as a proxy to all empty holdings
-        if instrument_holdings != 0:
+        if isinstance(instrument_holdings, pd.Series):
             ih_fut, ih_eqt = self._split_and_check_instruments(
                 instrument_holdings
             )
-        else:
+        elif instrument_holdings == 0:
             ih_fut, ih_eqt = (0, 0)
+        else:
+            raise TypeError("instrument_holdings must be pd.Series or 0")
 
         eq_trades = rounder(ddh_eqt.divide(price_eqt) - ih_eqt)
 
