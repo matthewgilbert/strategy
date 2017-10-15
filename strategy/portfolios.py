@@ -10,10 +10,39 @@ import mapping as mp
 import functools
 
 
-class QuarterlyPortfolio(strategy.Portfolio):
+class ExpiryPortfolio(strategy.Portfolio):
+    __doc__ = (strategy.Portfolio.__doc__ +
+               '\nThis is a concrete implementation which rolls each futures '
+               'instrument in its\nentirety on a fixed number of days '
+               'relative to the earlier of the instruments\nFirst Notice and '
+               'Last Trade dates')
 
+    # better to find a DRY method for docstring
     def __init__(self, offset, *args, **kwargs):
-        super(QuarterlyPortfolio, self).__init__(*args, **kwargs)
+        """
+        Parameters:
+        -----------
+        exposures: Exposures
+            An Exposures instance containing the asset exposures for trading
+            and backtesting
+        start_date:
+            TODO
+        end_date:
+            TODO
+        initial_capital: float
+            Starting capital for backtest
+        get_calendar: function
+            Map which takes an exchange name as a string and returns an
+            instance of a pandas_market_calendars.MarketCalendar. Default is
+            pandas_market_calendars.get_calendar
+        holidays: list
+            list of timezone aware pd.Timestamps used for holidays in addition
+            to exchange holidays associated with instruments
+        offset: int
+            Number of business days to roll relative to earlier of the
+            instruments First Notice and Last Trade date
+        """
+        super(ExpiryPortfolio, self).__init__(*args, **kwargs)
         self.offset = offset
 
     def instrument_weights(self, dates=None):
@@ -71,7 +100,7 @@ class QuarterlyPortfolio(strategy.Portfolio):
         return code_close_by[["root_generic", "close_by_earliest_cntrct"]]
 
 
-class DailyRebalancePortfolio(QuarterlyPortfolio):
+class DailyRebalancePortfolio(ExpiryPortfolio):
 
     def rebalance_dates(self):
         return self.tradeable_dates()
