@@ -89,6 +89,7 @@ class Exposures():
         self._meta_data = meta_data
 
         future_gnrcs = generic_futures.to_dict()
+        self._future_root_and_generics = future_gnrcs
         roots = []
         generics = []
         for root in future_gnrcs:
@@ -173,6 +174,13 @@ class Exposures():
         Tuple of equities, e.g. ("XIV",)
         """
         return self._equities
+
+    @property
+    def future_root_and_generics(self):
+        """
+        Dict with key as root generic and value as list of future generics
+        """
+        return self._future_root_and_generics
 
     @property
     def future_generics(self):

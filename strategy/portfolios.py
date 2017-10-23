@@ -65,13 +65,16 @@ class ExpiryPortfolio(strategy.Portfolio):
             cntrct_close_by_dates[grp] = dts.loc[:, "close_by_earliest_cntrct"]
 
         wts = {}
-        for ast in self._exposures.root_futures:
-            cols = pd.MultiIndex.from_product([[ast + "1"], ['front', 'back']])
+        for root in self._exposures.future_root_and_generics:
+            gnrcs = self._exposures.future_root_and_generics[root]
+            cols = pd.MultiIndex.from_product([gnrcs, ['front', 'back']])
             idx = [self.offset - 1, self.offset]
-            transition = pd.DataFrame([[1.0, 0.0], [0.0, 1.0]], index=idx,
+            trans = np.repeat(np.array([[1.0, 0.0], [0.0, 1.0]]), len(gnrcs),
+                              axis=1)
+            transition = pd.DataFrame(trans, index=idx,
                                       columns=cols)
-            wts[ast] = mp.mappings.roller(dates,
-                                          cntrct_close_by_dates[ast],
+            wts[root] = mp.mappings.roller(dates,
+                                          cntrct_close_by_dates[root],
                                           mp.mappings.static_transition,
                                           transition=transition)
         return wts
