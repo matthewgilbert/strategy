@@ -69,8 +69,7 @@ class ExpiryPortfolio(strategy.Portfolio):
             gnrcs = self._exposures.future_root_and_generics[root]
             cols = pd.MultiIndex.from_product([gnrcs, ['front', 'back']])
             idx = [self.offset - 1, self.offset]
-            trans = np.repeat(np.array([[1.0, 0.0], [0.0, 1.0]]), len(gnrcs),
-                              axis=1)
+            trans = np.tile(np.array([[1.0, 0.0], [0.0, 1.0]]), len(gnrcs))
             transition = pd.DataFrame(trans, index=idx,
                                       columns=cols)
             wts[root] = mp.mappings.roller(dates,
