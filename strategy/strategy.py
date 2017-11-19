@@ -59,28 +59,12 @@ class Exposures():
             given default is identity function.
         """
 
-        if expiries.contract.duplicated().any():
-            dupes = expiries.loc[expiries.contract.duplicated(keep=False)]
-            raise ValueError("Cannot provide multiple rows for same contract"
-                             "\n{0}".format(dupes))
-
         if sorted(list(prices.keys())) != sorted(list(meta_data.columns)):
             raise ValueError("'meta_data' must contain data on all keys in "
                              "'prices'")
 
         self._prices = dict([(key, prices[key].copy()) for key in prices])
-        exp = expiries.copy()
-        exp.loc[:, "year"] = exp.contract.str[:4].apply(lambda x: int(x))
-        exp.loc[:, "month"] = exp.contract.str[-1].apply(lambda x:
-                                                         self._month_map[x])
-        exp.loc[:, "root_generic"] = exp.contract.str[4:6]
-        exp.loc[:, "first_notice"] = pd.to_datetime(exp.loc[:, "first_notice"],
-                                                    format="%Y-%m-%d")
-        exp.loc[:, "last_trade"] = pd.to_datetime(exp.loc[:, "last_trade"],
-                                                  format="%Y-%m-%d")
-        exp = exp[["contract", "year", "month", "root_generic",
-                   "first_notice", "last_trade"]]
-        self._expiries = exp
+        self._expiries = self._validate_expiries(expiries)
 
         meta_data = meta_data.copy()
         meta_data.columns.name = "root_generic"
@@ -133,6 +117,31 @@ class Exposures():
                        " price data:{0}\n".format(extra_expiries))
         if warning:
             warnings.warn(warning)
+
+    @classmethod
+    def _validate_expiries(cls, expiries):
+        if expiries.contract.duplicated().any():
+            dupes = expiries.loc[expiries.contract.duplicated(keep=False)]
+            raise ValueError("Cannot provide multiple rows for same contract"
+                             "in 'expiries'\n{0}".format(dupes))
+
+        matches = expiries.contract.str.match("[0-9]{4}[a-zA-Z]{2}[FGHJKMNQUVXZ]{1}$")  # NOQA
+        if not matches.all():
+            raise ValueError("'expiries' contract column must have specified "
+                             "format\n{0}".format(expiries.loc[~matches, :]))
+
+        exp = expiries.copy()
+        exp.loc[:, "year"] = exp.contract.str[:4].apply(lambda x: int(x))
+        exp.loc[:, "month"] = exp.contract.str[-1].apply(lambda x:
+                                                         cls._month_map[x])
+        exp.loc[:, "root_generic"] = exp.contract.str[4:6]
+        exp.loc[:, "first_notice"] = pd.to_datetime(exp.loc[:, "first_notice"],
+                                                    format="%Y-%m-%d")
+        exp.loc[:, "last_trade"] = pd.to_datetime(exp.loc[:, "last_trade"],
+                                                  format="%Y-%m-%d")
+        exp = exp[["contract", "year", "month", "root_generic",
+                   "first_notice", "last_trade"]]
+        return exp
 
     def __repr__(self):
         return (
@@ -346,11 +355,13 @@ class Exposures():
         -----------
         data_folder: str
             Folder containing market data files for equities and futures.
-            An example of the folder structure is shown below. Folders must be
-            consistent with Exposures.read_futures() and
-            Exposures.read_equities() respectively.
+            An example of the folder structure is shown below. Each instrument
+            subfolder must be consistent with Exposures.read_futures() and
+            Exposures.read_equities() respectively. contract_dates.csv must be
+            readable by Exposures.read_expiries()
 
                 marketdata/
+                contract_dates.csv
                   ES/
                     ESH2017.csv
                     ESM2017.csv
@@ -379,11 +390,30 @@ class Exposures():
             prices[root_generic] = asset_type_reader(gnrc_fldr)
 
         expiry_file = os.path.join(data_folder, "contract_dates.csv")
-        expiries = pd.read_csv(expiry_file)
         futures = instrument_types.loc[instrument_types == "future"].index
-        expiries = expiries.loc[expiries.contract.str[4:6].isin(futures)]
+        expiries = cls.read_expiries(expiry_file, futures)
 
         return (prices, expiries)
+
+    @staticmethod
+    def read_expiries(expiry_file, subset):
+        """
+        Read expiry information on futures instruments. File should contain
+        columns ["contract", "first_notice", "last_trade"] where "first_notice"
+        and "last_trade" must be parseable to datetimes with format %Y-%m-%d
+        and "contract" must be a string in the form YYYYNNC representing the
+        contract name, e.g. "2007ESU".
+
+        Parameters:
+        -----------
+        expiry_file: str
+            csv file to read expiry data.
+        subset: set
+            Subset of contracts to keep.
+        """
+        expiries = pd.read_csv(expiry_file)
+        expiries = expiries.loc[expiries.contract.str[4:6].isin(subset)]
+        return expiries
 
     @staticmethod
     def read_futures(folder, columns=["Settle"]):
@@ -655,7 +685,7 @@ class Portfolio(metaclass=ABCMeta):
         See also: mapping.util.weighted_expiration()
         """
         wts = self.instrument_weights()
-        ltd = self._exposures.expiries.set_index("contract").loc[:, "last_trade"] # NOQA
+        ltd = self._exposures.expiries.set_index("contract").loc[:, "last_trade"]  # NOQA
         durations = {}
         for generic in wts:
             durations[generic] = mp.util.weighted_expiration(wts[generic], ltd)
@@ -709,7 +739,10 @@ class Portfolio(metaclass=ABCMeta):
         Parameters
         ----------
         signal: pd.DataFrame
-            Allocations to generic instruments through time.
+            Allocations to generic instruments through time. Must contain
+            values for all rebalance_dates(). This is used as the input to
+            trade() or for fungible trades directly scaled by risk target
+            and capital.
         tradeables: boolean
             Calculate trades in notional space or use actual fixed size
             contracts, i.e. discrete trade sizes
@@ -717,10 +750,11 @@ class Portfolio(metaclass=ABCMeta):
             Function to round pd.Series contracts to integers, if None default
             pd.Series.round is used.
         reinvest: boolean
-            Whether to reinvest PnL, i.e. have a capital base that is time
-            varying versus running a constant amount of capital and risk
+            Whether PnL is added/subtracted from the capital, i.e. have a
+            capital base that is time varying versus running a constant amount
+            of capital.
         risk_target: float
-            Percentage of capital risk to run
+            Percentage of capital risk to run, used as input to trade().
 
         Returns
         -------
