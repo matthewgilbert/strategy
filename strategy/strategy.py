@@ -138,7 +138,10 @@ class Exposures():
         return (
             "Exposures:\n"
             "----------\n"
-            "{0}").format(self.meta_data)
+            "{0}\n\n"
+            "Generic Futures: {1}\n"
+            "Equities: {2}\n").format(self.meta_data, self.future_generics,
+                                      self.equities)
 
     @property
     def prices(self):
@@ -499,14 +502,27 @@ class Portfolio(metaclass=ABCMeta):
         return (
             "Portfolio Initial Capital: {0}\n"
             "Portfolio Exposures:\n"
-            "{1}\n\n"
-            "Generic Instruments:{2}\n\n"
+            "{1}\n"
             "Date Range:\n"
             "----------\n"
-            "Start: {3}\n"
-            "End: {4}\n"
-        ).format(self._capital, self._exposures, self.generics(),
+            "Start: {2}\n"
+            "End: {3}\n"
+        ).format(self._capital, self._exposures,
                  self._start_date, self._end_date)
+
+    @property
+    def equities(self):
+        """
+        Return tuple of equities defined in portfolio
+        """
+        return self._exposures.equities
+
+    @property
+    def future_generics(self):
+        """
+        Return tuple of generic futures defined in portfolio
+        """
+        return self._exposures.future_generics
 
     def tradeable_dates(self, how='all'):
         """
@@ -566,12 +582,6 @@ class Portfolio(metaclass=ABCMeta):
             holidays=adhoc_holidays.tolist(),
             calendar=calendar
         )
-
-    def generics(self):
-        """
-        Return list of generic exposures, e.g. ["ES1", "ES2", "XIV"]
-        """
-        return self._exposures.future_generics + self._exposures.equities
 
     def _split_and_check_generics(self, generics):
         if isinstance(generics, pd.Series):
@@ -636,6 +646,21 @@ class Portfolio(metaclass=ABCMeta):
         generic, see mapper.mappings.roller()
         """
         raise NotImplementedError()
+
+    def generic_durations(self):
+        """
+        Return a dictionary with root future generics as keys and
+        pandas.DataFrames of future generic durations.
+
+        See also: mapping.util.weighted_expiration()
+        """
+        wts = self.instrument_weights()
+        ltd = self._exposures.expiries.set_index("contract").loc[:, "last_trade"] # NOQA
+        durations = {}
+        for generic in wts:
+            durations[generic] = mp.util.weighted_expiration(wts[generic], ltd)
+
+        return durations
 
     @functools.lru_cache(maxsize=1)
     def continuous_rets(self):
@@ -743,8 +768,10 @@ class Portfolio(metaclass=ABCMeta):
 
                     new_exp = self.notional_exposure(dt, crnt_instrs, trds,
                                                      prices_t, weights)
-                    # account for fact that trds mapped to notionals might
-                    # cover all previous generic holdings
+                    # account for fact that 'trds' mapped to 'new_exp'
+                    # (generic notionals) might not span all previous generic
+                    # holdings, which should be interpreted as having 0
+                    # exposure to this generic now
                     new_exp = new_exp.reindex(current_exp.index).fillna(0)
 
                     # calculate generic notional trades

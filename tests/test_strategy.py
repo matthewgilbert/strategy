@@ -1,4 +1,4 @@
-from strategy.portfolios import QuarterlyPortfolio
+from strategy.portfolios import ExpiryPortfolio
 import pandas as pd
 import strategy.strategy as strat
 import unittest

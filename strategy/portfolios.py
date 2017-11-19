@@ -73,9 +73,9 @@ class ExpiryPortfolio(strategy.Portfolio):
             transition = pd.DataFrame(trans, index=idx,
                                       columns=cols)
             wts[root] = mp.mappings.roller(dates,
-                                          cntrct_close_by_dates[root],
-                                          mp.mappings.static_transition,
-                                          transition=transition)
+                                           cntrct_close_by_dates[root],
+                                           mp.mappings.static_transition,
+                                           transition=transition)
         return wts
 
     def rebalance_dates(self):
