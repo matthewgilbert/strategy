@@ -18,7 +18,7 @@ class ExpiryPortfolio(strategy.Portfolio):
                'Last Trade dates')
 
     # better to find a DRY method for docstring
-    def __init__(self, offset, *args, **kwargs):
+    def __init__(self, offset, all_monthly, *args, **kwargs):
         """
         Parameters:
         -----------
@@ -41,9 +41,14 @@ class ExpiryPortfolio(strategy.Portfolio):
         offset: int
             Number of business days to roll relative to earlier of the
             instruments First Notice and Last Trade date
+        all_monthly: boolean
+            Whether to roll each contract individually based on the offset from
+            the earlier of its First Notice and Last Trade date or to roll all
+            contracts with the same month code based on the earliest date
         """
         super(ExpiryPortfolio, self).__init__(*args, **kwargs)
-        self.offset = offset
+        self._offset = offset
+        self._all_monthly = all_monthly
 
     def instrument_weights(self, dates=None):
         if dates is None:
@@ -62,13 +67,13 @@ class ExpiryPortfolio(strategy.Portfolio):
 
         cntrct_close_by_dates = {}
         for grp, dts in code_close_by.groupby("root_generic"):
-            cntrct_close_by_dates[grp] = dts.loc[:, "close_by_earliest_cntrct"]
+            cntrct_close_by_dates[grp] = dts.loc[:, "close_by"]
 
         wts = {}
         for root in self._exposures.future_root_and_generics:
             gnrcs = self._exposures.future_root_and_generics[root]
             cols = pd.MultiIndex.from_product([gnrcs, ['front', 'back']])
-            idx = [self.offset - 1, self.offset]
+            idx = [self._offset - 1, self._offset]
             trans = np.tile(np.array([[1.0, 0.0], [0.0, 1.0]]), len(gnrcs))
             transition = pd.DataFrame(trans, index=idx,
                                       columns=cols)
@@ -79,10 +84,10 @@ class ExpiryPortfolio(strategy.Portfolio):
         return wts
 
     def rebalance_dates(self):
-        code_close_by = self._get_close_by_dates()
+        close_by = self._get_close_by_dates()
         holidays = self.holidays().holidays
-        rebal_dates = code_close_by.loc[:, "close_by_earliest_cntrct"].sort_values().unique().astype('datetime64[D]')  # NOQA
-        rebal_dates = np.busday_offset(rebal_dates, offsets=self.offset,
+        rebal_dates = close_by.loc[:, "close_by"].sort_values().unique().astype('datetime64[D]')  # NOQA
+        rebal_dates = np.busday_offset(rebal_dates, offsets=self._offset,
                                        roll='preceding', holidays=holidays)
         rebal_dates = pd.DatetimeIndex(rebal_dates)
         rebal_dates = rebal_dates[rebal_dates >= self._start_date]
@@ -90,16 +95,18 @@ class ExpiryPortfolio(strategy.Portfolio):
         return rebal_dates
 
     def _get_close_by_dates(self):
-        # calculate the days to rebalance on based on rolling all monthly
-        # contracts on the same day based on an offset from the earliest
-        # contracts First Notice date
+        # calculate the days to offset from for each contract
         close_by = self._exposures.expiries.set_index("contract")
         close_by.loc[:, "close_by"] = close_by[["first_notice", "last_trade"]].min(axis=1)  # NOQA
         close_by = close_by.sort_values("close_by")
         # for contracts for each monthly code across all products, take the
         # earliest close by date
-        code_close_by = close_by.join(close_by.groupby(["year", "month"]).first(), on=["year", "month"], rsuffix="_earliest_cntrct")  # NOQA
-        return code_close_by[["root_generic", "close_by_earliest_cntrct"]]
+        if self._all_monthly:
+            close_by = close_by.join(close_by.groupby(["year", "month"]).first(), on=["year", "month"], rsuffix="_earliest_cntrct")  # NOQA
+            close_by = close_by[["root_generic", "close_by_earliest_cntrct"]]
+            close_by.columns = ["root_generic", "close_by"]
+
+        return close_by.loc[:, ["root_generic", "close_by"]]
 
 
 class DailyRebalancePortfolio(ExpiryPortfolio):
