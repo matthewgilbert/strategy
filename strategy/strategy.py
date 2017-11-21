@@ -512,21 +512,44 @@ class Portfolio(metaclass=ABCMeta):
         """
 
         self._exposures = exposures
+        self._start_date = start_date
+        self._end_date = end_date
+        self._capital = initial_capital
 
         if get_calendar is None:
             get_calendar = mcal.get_calendar
 
         calendars = []
+        calendar_schedules = {}
         for exchange in self._exposures.meta_data.loc["exchange"].unique():
-            calendars.append(get_calendar(exchange))
+            calendar = get_calendar(exchange)
+            calendars.append(calendar)
+            calendar_schedules[exchange] = calendar.schedule(self._start_date,
+                                                             self._end_date)
 
         if holidays:
             calendars.append(_AdhocExchangeCalendar(holidays))
 
-        self._start_date = start_date
-        self._end_date = end_date
         self._calendars = calendars
-        self._capital = initial_capital
+        self._calendar_schedules = calendar_schedules
+
+        # warn user when price data does not exist for dates which are not
+        # known to be exchange holidays, likely an indicator of spotty price
+        # data source
+        for ast, exch in self._exposures.meta_data.loc["exchange"].items():
+            ast_dts = self._exposures.prices[ast].index.levels[0]
+            exch_dts = calendar_schedules[exch].index
+            missing_dts = exch_dts.difference(ast_dts)
+
+            # warn the user if instantiating instance with instruments which
+            # don't have price data consistent with given calendars
+            warning = ""
+            if len(missing_dts) > 0:
+                warning = (warning + "Generic instrument {0} on exchange {1} "
+                           "missing price data for tradeable calendar dates:\n"
+                           "{2}\n".format(ast, exch, missing_dts))
+            if warning:
+                warnings.warn(warning)
 
     def __repr__(self):
         return (
@@ -588,14 +611,12 @@ class Portfolio(metaclass=ABCMeta):
         --------
         pandas.DataFrame schedule
         """
-        return self._schedule(how, self._start_date, self._end_date)
+        return self._schedule(how)
 
     @functools.lru_cache()
-    def _schedule(self, how, start_date, end_date):
-        sched = []
-        for cal in self._calendars:
-            sched.append(cal.schedule(start_date, end_date))
-        return mcal.merge_schedules(sched, how=how)
+    def _schedule(self, how):
+        schedules = list(self._calendar_schedules.values())
+        return mcal.merge_schedules(schedules, how=how)
 
     def holidays(self):
         """
@@ -734,7 +755,8 @@ class Portfolio(metaclass=ABCMeta):
                  reinvest=True, risk_target=0.12):
         """
         Simulate trading strategy with or without discrete trade sizes and
-        revinvested.
+        revinvested. Holdings are marked to market for each day in
+        tradeable_dates().
 
         Parameters
         ----------
@@ -773,6 +795,21 @@ class Portfolio(metaclass=ABCMeta):
         if missing.any():
             raise ValueError("'signal' must contain values for "
                              "dates %s" % required_signal_dts[missing])
+
+        futures, _ = self._split_and_check_generics(signal.columns)
+        futures = set(futures)
+        for ast in signal.columns:
+            req_price_dts = signal.loc[rebal_dates, ast].dropna().index
+            if ast in futures:
+                ast = self._exposures.generic_to_root([ast])[0]
+            price_dts = self._exposures.prices[ast].index.levels[0]
+            isin = req_price_dts.isin(price_dts)
+            if not isin.all():
+                raise ValueError("Price data in Exposures contained within "
+                                 "Portfolio must contain prices for "
+                                 "'rebalance_dates' when 'signal' is "
+                                 "not NaN, {0} needs prices for:"
+                                 "\n{1}\n".format(ast, req_price_dts[~isin]))
 
         returns = self.continuous_rets()
         capital = self._capital
