@@ -3,3 +3,4 @@
 strategy/__pycache__/
 tests/__pycache__/
 strategy.egg-info
+*.ipynb_checkpoints/
