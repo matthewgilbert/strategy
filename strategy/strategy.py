@@ -521,7 +521,7 @@ class Portfolio(metaclass=ABCMeta):
 
         calendars = []
         calendar_schedules = {}
-        for exchange in self._exposures.meta_data.loc["exchange"].unique():
+        for exchange in exposures.meta_data.loc["exchange"].unique():
             calendar = get_calendar(exchange)
             calendars.append(calendar)
             calendar_schedules[exchange] = calendar.schedule(self._start_date,
@@ -536,8 +536,8 @@ class Portfolio(metaclass=ABCMeta):
         # warn user when price data does not exist for dates which are not
         # known to be exchange holidays, likely an indicator of spotty price
         # data source
-        for ast, exch in self._exposures.meta_data.loc["exchange"].items():
-            ast_dts = self._exposures.prices[ast].index.levels[0]
+        for ast, exch in exposures.meta_data.loc["exchange"].items():
+            ast_dts = exposures.prices[ast].index.levels[0]
             exch_dts = calendar_schedules[exch].index
             missing_dts = exch_dts.difference(ast_dts)
 
