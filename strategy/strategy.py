@@ -298,7 +298,7 @@ class Exposures():
         return prices
 
     @classmethod
-    def from_folder(cls, meta_file, data_folder):
+    def from_folder(cls, meta_file, data_folder, root_generics=None):
         """
         Initialize and Exposures instance from a meta information file and a
         data folder.
@@ -309,12 +309,17 @@ class Exposures():
             File path name to be parsed by Exposures.parse_meta()
         data_folder: str
             Folder path name to be parsed by Exposures.parse_folder()
+        root_generics: list
+            Subset of generic instruments to select from the instrument meta
+            file
 
         Returns:
         --------
         An Exposures instance.
         """
-        meta_data = cls.parse_meta(meta_file)  # NOQA
+        meta_data = cls.parse_meta(meta_file)
+        if root_generics is not None:
+            meta_data = meta_data.loc[:, root_generics]
         prices, expiries = cls.parse_folder(data_folder,
                                             meta_data.loc["instrument_type"])
         return cls(prices, expiries, meta_data)
@@ -780,8 +785,9 @@ class Portfolio(metaclass=ABCMeta):
 
         Returns
         -------
-        Tuple of "holdings", "trades" and "pnl" which refer to notional
-        holdings, notional trades and portfolio pnl respectively
+        Tuple of "holdings", "trades" and "pnl" which refer to a DataFrame of
+        notional holdings, a DataFrame of notional trades and a Series of
+        portfolio pnl respectively.
         """
 
         if not signal.columns.is_unique:
