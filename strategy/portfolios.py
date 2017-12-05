@@ -22,13 +22,20 @@ class ExpiryPortfolio(strategy.Portfolio):
         """
         Parameters:
         -----------
+        offset: int
+            Number of business days to roll relative to earlier of the
+            instruments First Notice and Last Trade date
+        all_monthly: boolean
+            Whether to roll each contract individually based on the offset from
+            the earlier of its First Notice and Last Trade date or to roll all
+            contracts with the same month code based on the earliest date
         exposures: Exposures
             An Exposures instance containing the asset exposures for trading
             and backtesting
-        start_date:
-            TODO
-        end_date:
-            TODO
+        start_date: pandas.Timestamp
+            First allowable date when running portfolio simulations
+        end_date: pandas.Timestamp
+            Last allowable date when running portfolio simulations
         initial_capital: float
             Starting capital for backtest
         get_calendar: function
@@ -38,13 +45,6 @@ class ExpiryPortfolio(strategy.Portfolio):
         holidays: list
             list of timezone aware pd.Timestamps used for holidays in addition
             to exchange holidays associated with instruments
-        offset: int
-            Number of business days to roll relative to earlier of the
-            instruments First Notice and Last Trade date
-        all_monthly: boolean
-            Whether to roll each contract individually based on the offset from
-            the earlier of its First Notice and Last Trade date or to roll all
-            contracts with the same month code based on the earliest date
         """
         super(ExpiryPortfolio, self).__init__(*args, **kwargs)
         self._offset = offset
@@ -84,6 +84,18 @@ class ExpiryPortfolio(strategy.Portfolio):
         return wts
 
     def rebalance_dates(self):
+        """
+        Rebalance days for trading strategy. These are defined as the offset
+        given from the earlier of the instruments First Notice and Last Trade
+        date. If all_monthly=True then then roll all monthly contracts
+        together based on earliest date for this set of contracts. The
+        start_date or if this is not a business day the following business day
+        is also included in the rebalance days.
+
+        Returns
+        -------
+        pandas.DatetimeIndex
+        """
         close_by = self._get_close_by_dates()
         holidays = self.holidays().holidays
         rebal_dates = close_by.loc[:, "close_by"].sort_values().unique().astype('datetime64[D]')  # NOQA
@@ -92,6 +104,10 @@ class ExpiryPortfolio(strategy.Portfolio):
         rebal_dates = pd.DatetimeIndex(rebal_dates)
         rebal_dates = rebal_dates[rebal_dates >= self._start_date]
         rebal_dates = rebal_dates[rebal_dates <= self._end_date]
+        first_date = np.busday_offset(self._start_date, 0, roll="following",
+                                      holidays=holidays)
+        rebal_dates = rebal_dates.union([first_date])
+
         return rebal_dates
 
     def _get_close_by_dates(self):
@@ -112,4 +128,12 @@ class ExpiryPortfolio(strategy.Portfolio):
 class DailyRebalancePortfolio(ExpiryPortfolio):
 
     def rebalance_dates(self):
+        """
+        Rebalance days for trading strategy. These are defined as all tradeable
+        dates, i.e. tradeable_dates()
+
+        Returns
+        -------
+        pandas.DatetimeIndex
+        """
         return self.tradeable_dates()
