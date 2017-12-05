@@ -22,9 +22,11 @@ class ExpiryPortfolio(strategy.Portfolio):
         """
         Parameters:
         -----------
-        offset: int
+        offset: int or dict
             Number of business days to roll relative to earlier of the
-            instruments First Notice and Last Trade date
+            instruments First Notice and Last Trade date. If int is given use
+            the same number for all futures, if dict is given keys must cover
+            all root generics and contain an integer for each.
         all_monthly: boolean
             Whether to roll each contract individually based on the offset from
             the earlier of its First Notice and Last Trade date or to roll all
@@ -47,8 +49,13 @@ class ExpiryPortfolio(strategy.Portfolio):
             to exchange holidays associated with instruments
         """
         super(ExpiryPortfolio, self).__init__(*args, **kwargs)
-        self._offset = offset
         self._all_monthly = all_monthly
+
+        roots = self._exposures.root_futures
+        if not isinstance(offset, dict):
+            self._offset = dict(zip(roots, len(roots) * [offset]))
+        else:
+            self._offset = offset
 
     def instrument_weights(self, dates=None):
         if dates is None:
@@ -73,7 +80,8 @@ class ExpiryPortfolio(strategy.Portfolio):
         for root in self._exposures.future_root_and_generics:
             gnrcs = self._exposures.future_root_and_generics[root]
             cols = pd.MultiIndex.from_product([gnrcs, ['front', 'back']])
-            idx = [self._offset - 1, self._offset]
+            offset = self._offset[root]
+            idx = [offset - 1, offset]
             trans = np.tile(np.array([[1.0, 0.0], [0.0, 1.0]]), len(gnrcs))
             transition = pd.DataFrame(trans, index=idx,
                                       columns=cols)
@@ -98,10 +106,17 @@ class ExpiryPortfolio(strategy.Portfolio):
         """
         close_by = self._get_close_by_dates()
         holidays = self.holidays().holidays
-        rebal_dates = close_by.loc[:, "close_by"].sort_values().unique().astype('datetime64[D]')  # NOQA
-        rebal_dates = np.busday_offset(rebal_dates, offsets=self._offset,
-                                       roll='preceding', holidays=holidays)
-        rebal_dates = pd.DatetimeIndex(rebal_dates)
+        gnrc_close_by = close_by.groupby(["root_generic"])
+        rebal_dates = []
+        for gnrc, close_by_dates in gnrc_close_by:
+            offset = self._offset[gnrc]
+            dates = close_by_dates.loc[:, "close_by"].values.astype('datetime64[D]')  # NOQA
+            dates = np.busday_offset(dates, offsets=offset, roll='preceding',
+                                     holidays=holidays)
+            rebal_dates.append(dates)
+
+        rebal_dates = np.concatenate(rebal_dates)
+        rebal_dates = pd.DatetimeIndex(rebal_dates).unique().sort_values()
         rebal_dates = rebal_dates[rebal_dates >= self._start_date]
         rebal_dates = rebal_dates[rebal_dates <= self._end_date]
         first_date = np.busday_offset(self._start_date, 0, roll="following",
