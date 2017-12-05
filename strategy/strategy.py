@@ -768,7 +768,7 @@ class Portfolio(metaclass=ABCMeta):
         signal: pd.DataFrame
             Allocations to generic instruments through time. Must contain
             values for all rebalance_dates(). This is used as the input to
-            trade() or for fungible trades directly scaled by risk target
+            trade() or when tradeables=False directly scaled by risk target
             and capital.
         tradeables: boolean
             Calculate trades in notional space or use actual fixed size
@@ -793,17 +793,18 @@ class Portfolio(metaclass=ABCMeta):
         if not signal.columns.is_unique:
             raise ValueError("signal must have unique columns")
 
+        # validate signal data prior to running a simulation, avoid slow
+        # runtime error
         rebal_dates = self.rebalance_dates()
-        tradeable_dates = self.tradeable_dates()
-
-        required_signal_dts = rebal_dates.intersection(tradeable_dates)
-        missing = ~required_signal_dts.isin(signal.index)
+        missing = ~rebal_dates.isin(signal.index)
         if missing.any():
             raise ValueError("'signal' must contain values for "
-                             "dates %s" % required_signal_dts[missing])
+                             "dates %s" % rebal_dates[missing])
 
         futures, _ = self._split_and_check_generics(signal.columns)
         futures = set(futures)
+        # validate pricing data exists for at least one instrument for the
+        # dates where there is signal data
         for ast in signal.columns:
             req_price_dts = signal.loc[rebal_dates, ast].dropna().index
             if ast in futures:
@@ -828,6 +829,7 @@ class Portfolio(metaclass=ABCMeta):
         pnls = []
         crnt_instrs = 0
         weights = self.instrument_weights()
+        tradeable_dates = self.tradeable_dates()
         for dt in tradeable_dates:
             daily_pnl = (current_exp * returns.loc[dt]).sum()
             pnls.append(daily_pnl)
