@@ -271,8 +271,8 @@ class Exposures():
         -----------
         date: pd.Timestamp
             Desired time for prices
-        root_generics: list
-            List of strings of root generics to lookup prices for. These
+        root_generics: iterable
+            Iterable of strings of root generics to lookup prices for. These
             correspond to the keys in the prices dictionnary used to
             initialize the Exposures.
 
@@ -309,9 +309,10 @@ class Exposures():
             File path name to be parsed by Exposures.parse_meta()
         data_folder: str
             Folder path name to be parsed by Exposures.parse_folder()
-        root_generics: list
-            Subset of generic instruments to select from the instrument meta
-            file
+        root_generics: list or dict
+            If list is given subset of generic instruments to select from the
+            instrument meta file. If dict, dict.keys() acts as list for subset
+            selection and values should be lists of generics.
 
         Returns:
         --------
@@ -319,7 +320,13 @@ class Exposures():
         """
         meta_data = cls.parse_meta(meta_file)
         if root_generics is not None:
-            meta_data = meta_data.loc[:, root_generics]
+            if isinstance(root_generics, list):
+                meta_data = meta_data.loc[:, root_generics]
+            else:
+                meta_data = meta_data.loc[:, root_generics.keys()]
+                for key in root_generics.keys():
+                    meta_data.loc["generics", key] = root_generics[key]
+
         prices, expiries = cls.parse_folder(data_folder,
                                             meta_data.loc["instrument_type"])
         return cls(prices, expiries, meta_data)
@@ -501,10 +508,10 @@ class Portfolio(metaclass=ABCMeta):
         exposures: Exposures
             An Exposures instance containing the asset exposures for trading
             and backtesting
-        start_date:
-            TODO
-        end_date:
-            TODO
+        start_date: pandas.Timestamp
+            First allowable date when running portfolio simulations
+        end_date: pandas.Timestamp
+            Last allowable date when running portfolio simulations
         initial_capital: float
             Starting capital for backtest
         get_calendar: function
@@ -831,17 +838,21 @@ class Portfolio(metaclass=ABCMeta):
         weights = self.instrument_weights()
         tradeable_dates = self.tradeable_dates()
         for dt in tradeable_dates:
+            # exposure from time dt - 1
             daily_pnl = (current_exp * returns.loc[dt]).sum()
             pnls.append(daily_pnl)
             if reinvest:
                 capital += daily_pnl
+            # update exposures to time dt
             current_exp = current_exp * (1 + returns.loc[dt])
             if dt in rebal_dates:
                 if tradeables:
                     sig_t = signal.loc[dt].dropna()
                     futs, eqts = self._split_and_check_generics(sig_t.index)
                     rt_futs = self._exposures.generic_to_root(futs)
-                    prices_t = self._exposures.get_xprices(dt, rt_futs + eqts)
+                    # call set() to avoid duplicate rt_futs for cases with
+                    # multiple generics, e.g. ES1, ES2
+                    prices_t = self._exposures.get_xprices(dt, set(rt_futs + eqts))  # NOQA
                     trds = self.trade(dt, crnt_instrs, sig_t, prices_t,
                                       capital, risk_target, rounder, weights)
 
@@ -867,6 +878,7 @@ class Portfolio(metaclass=ABCMeta):
                 trd_dts.append(dt)
 
             notional_exposures.append(current_exp)
+
         trades = pd.concat(trade_lst, axis=1, keys=rebal_dates).T
         notional_exposures = pd.concat(notional_exposures, axis=1,
                                        keys=tradeable_dates).T
