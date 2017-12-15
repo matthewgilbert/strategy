@@ -899,7 +899,8 @@ class Portfolio(metaclass=ABCMeta):
         date: pandas.Timestamp
             Date for trade
         instrument_holdings: pandas.Series
-            Current instrument holdings as integer number of contracts
+            Current instrument holdings as integer number of contracts. Can
+            pass 0 if there are no instrument holdings.
         unit_risk_exposures: pandas.Series
             Unit risk exposure of desired holdings in generics
         prices: pandas.Series
@@ -929,12 +930,10 @@ class Portfolio(metaclass=ABCMeta):
         if weights is None:
             weights = self.instrument_weights(pd.DatetimeIndex([date]))
 
-        dollar_desired_hlds = capital * risk_target * unit_risk_exposures
-
-        ddh_fut, ddh_eqt = self._split_and_check_generics(dollar_desired_hlds)
-        price_fut, price_eqt = self._split_and_check_instruments(prices)
         # to support passing 0 as a proxy to all empty holdings
         if isinstance(instrument_holdings, pd.Series):
+            if not instrument_holdings.index.is_unique:
+                raise ValueError("instrument_holdings must have unique index")
             ih_fut, ih_eqt = self._split_and_check_instruments(
                 instrument_holdings
             )
@@ -943,9 +942,14 @@ class Portfolio(metaclass=ABCMeta):
         else:
             raise TypeError("instrument_holdings must be pd.Series or 0")
 
+        dollar_desired_hlds = capital * risk_target * unit_risk_exposures
+
+        ddh_fut, ddh_eqt = self._split_and_check_generics(dollar_desired_hlds)
+        price_fut, price_eqt = self._split_and_check_instruments(prices)
+
         eq_trades = rounder(ddh_eqt.divide(price_eqt) - ih_eqt)
 
-        root_futs = self._exposures.generic_to_root(ddh_fut.index)
+        root_futs = set(self._exposures.generic_to_root(ddh_fut.index))
         weights = dict([(r, weights[r].loc[(date,)]) for r in root_futs])
 
         root_fut_mults = self._exposures.meta_data.loc["multiplier", root_futs]
@@ -965,7 +969,8 @@ class Portfolio(metaclass=ABCMeta):
         date: pandas.Timestamp
             Date for trade
         current_instruments: pandas.Series
-            Current instrument holdings as integer number of contracts
+            Current instrument holdings as integer number of contracts. Can
+            pass 0 if all current instrument holdings are 0.
         instrument_trades: pandas.Series
             Instrument trades as integer number of contracts
         prices: pandas.Series
@@ -983,6 +988,13 @@ class Portfolio(metaclass=ABCMeta):
         if weights is None:
             weights = self.instrument_weights(pd.DatetimeIndex([date]))
 
+        if not instrument_trades.index.is_unique:
+            raise ValueError('instrument_trades must have unique index')
+
+        if isinstance(current_instruments, pd.Series):
+            if not current_instruments.index.is_unique:
+                raise ValueError('current_instruments must have unique index')
+
         new_instrs = instrument_trades.add(current_instruments, fill_value=0)
         new_instrs = new_instrs[new_instrs != 0]
 
@@ -991,7 +1003,7 @@ class Portfolio(metaclass=ABCMeta):
 
         eqts_notional = new_eqts * prices_eqts.loc[new_eqts.index]
 
-        root_futs = self._exposures.instrument_to_root(new_futs.index)
+        root_futs = set(self._exposures.instrument_to_root(new_futs.index))
         weights = dict([(r, weights[r].loc[(date,)]) for r in root_futs])
         root_fut_mults = self._exposures.meta_data.loc["multiplier", root_futs]
         multipliers = mp.util.get_multiplier(weights, root_fut_mults)
