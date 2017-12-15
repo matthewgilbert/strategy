@@ -539,15 +539,10 @@ class Portfolio(metaclass=ABCMeta):
             calendar_schedules[exchange] = calendar.schedule(self._start_date,
                                                              self._end_date)
 
-        if holidays:
-            calendars.append(_AdhocExchangeCalendar(holidays))
-
-        self._calendars = calendars
-        self._calendar_schedules = calendar_schedules
-
         # warn user when price data does not exist for dates which are not
         # known to be exchange holidays, likely an indicator of spotty price
-        # data source
+        # data source. This will throw warnings even if user defined adhoc
+        # holidays for dates with no pricing
         for ast, exch in exposures.meta_data.loc["exchange"].items():
             ast_dts = exposures.prices[ast].index.levels[0]
             exch_dts = calendar_schedules[exch].index
@@ -562,6 +557,17 @@ class Portfolio(metaclass=ABCMeta):
                            "{2}\n".format(ast, exch, missing_dts))
             if warning:
                 warnings.warn(warning)
+
+        if holidays:
+            calendar = _AdhocExchangeCalendar(holidays)
+            calendars.append(calendar)
+            calendar_schedules["adhoc"] = calendar.schedule(self._start_date,
+                                                            self._end_date)
+
+        self._calendars = calendars
+        # this is stored as an optimization to avoid having to call
+        # calendar.schedule() again on self._calendars
+        self._calendar_schedules = calendar_schedules
 
     def __repr__(self):
         return (
