@@ -870,17 +870,19 @@ class Portfolio(metaclass=ABCMeta):
                     # exposure to this generic now
                     new_exp = new_exp.reindex(current_exp.index).fillna(0)
 
-                    # calculate generic notional trades
-                    trd_dt = new_exp - current_exp
+                    # current_exp and new_exp might differ by epsilon because
+                    # current_exp is based on compounded returns vs current
+                    # prices
+                    trd_ntl = (new_exp - current_exp).round(2)
                     current_exp = new_exp
                     crnt_instrs = trds.add(crnt_instrs, fill_value=0)
                     crnt_instrs = crnt_instrs.loc[crnt_instrs != 0]
                 else:
-                    trd_dt = (signal.loc[dt] * capital * risk_target -
-                              current_exp)
+                    trd_ntl = (signal.loc[dt] * capital * risk_target -
+                               current_exp)
                     current_exp = signal.loc[dt] * capital * risk_target
 
-                trade_lst.append(trd_dt)
+                trade_lst.append(trd_ntl)
                 trd_dts.append(dt)
 
             notional_exposures.append(current_exp)
