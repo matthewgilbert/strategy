@@ -81,7 +81,7 @@ class ExpiryPortfolio(strategy.Portfolio):
             gnrcs = self._exposures.future_root_and_generics[root]
             cols = pd.MultiIndex.from_product([gnrcs, ['front', 'back']])
             offset = self._offset[root]
-            idx = [offset - 1, offset]
+            idx = [offset, offset + 1]
             trans = np.tile(np.array([[1.0, 0.0], [0.0, 1.0]]), len(gnrcs))
             transition = pd.DataFrame(trans, index=idx,
                                       columns=cols)

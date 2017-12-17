@@ -843,7 +843,7 @@ class Portfolio(metaclass=ABCMeta):
         crnt_instrs = 0
         weights = self.instrument_weights()
         tradeable_dates = self.tradeable_dates()
-        for dt in tradeable_dates:
+        for i, dt in enumerate(tradeable_dates):
             # exposure from time dt - 1
             daily_pnl = (current_exp * returns.loc[dt]).sum()
             pnls.append(daily_pnl)
@@ -859,11 +859,16 @@ class Portfolio(metaclass=ABCMeta):
                     # call set() to avoid duplicate rt_futs for cases with
                     # multiple generics, e.g. ES1, ES2
                     prices_t = self._exposures.get_xprices(dt, set(rt_futs + eqts))  # NOQA
-                    trds = self.trade(dt, crnt_instrs, sig_t, prices_t,
+                    # this is quite hacky but needed to deal with the fact that
+                    # weights on the same day before and after a transition are
+                    # different
+                    # see https://github.com/matthewgilbert/strategy/issues/1
+                    dt_next = tradeable_dates[i + 1]
+                    trds = self.trade(dt_next, crnt_instrs, sig_t, prices_t,
                                       capital, risk_target, rounder, weights)
 
-                    new_exp = self.notional_exposure(dt, crnt_instrs, trds,
-                                                     prices_t, weights)
+                    new_exp = self.notional_exposure(dt_next, crnt_instrs,
+                                                     trds, prices_t, weights)
                     # account for fact that 'trds' mapped to 'new_exp'
                     # (generic notionals) might not span all previous generic
                     # holdings, which should be interpreted as having 0
