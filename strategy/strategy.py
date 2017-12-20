@@ -1086,9 +1086,9 @@ class _AdhocExchangeCalendar(mcal.MarketCalendar):
         return AbstractHolidayCalendar()
 
     @property
-    def open_time(self):
+    def open_time_default(self):
         return datetime.time(17, 1)
 
     @property
-    def close_time(self):
+    def close_time_default(self):
         return datetime.time(17)
