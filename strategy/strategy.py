@@ -13,6 +13,10 @@ import warnings
 import pandas_market_calendars as mcal
 from abc import ABCMeta, abstractmethod
 
+# control data warnings in object instantation, see
+# https://docs.python.org/3/library/warnings.html#the-warnings-filter
+WARNINGS = "default"
+
 
 class Exposures():
     """
@@ -116,7 +120,9 @@ class Exposures():
             warning = (warning + "Expiry data without futures"
                        " price data:{0}\n".format(extra_expiries))
         if warning:
-            warnings.warn(warning)
+            with warnings.catch_warnings():
+                warnings.simplefilter(WARNINGS)
+                warnings.warn(warning)
 
     @classmethod
     def _validate_expiries(cls, expiries):
@@ -556,7 +562,9 @@ class Portfolio(metaclass=ABCMeta):
                            "missing price data for tradeable calendar dates:\n"
                            "{2}\n".format(ast, exch, missing_dts))
             if warning:
-                warnings.warn(warning)
+                with warnings.catch_warnings():
+                    warnings.simplefilter(WARNINGS)
+                    warnings.warn(warning)
 
         if holidays:
             calendar = _AdhocExchangeCalendar(holidays)

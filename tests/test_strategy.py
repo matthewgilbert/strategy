@@ -1,11 +1,15 @@
 from strategy.portfolios import ExpiryPortfolio
 from strategy.strategy import Exposures
+import strategy.strategy as strat
 import pandas as pd
 import unittest
 from collections import namedtuple
 import os
 from pandas.util.testing import assert_frame_equal, assert_series_equal, \
     assert_index_equal
+
+# suppress missing price data warnings
+strat.WARNINGS = "ignore"
 
 
 class TestExpiryPortfolio(unittest.TestCase):
