@@ -33,7 +33,7 @@ install:
 
 script:
   - flake8 strategy
-  - pytest strategy/tests -v --cov=strategy --cov-report term-missing
+  - pytest tests -v --cov=strategy --cov-report term-missing
 
 after_success:
   - coveralls
