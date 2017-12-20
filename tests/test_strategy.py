@@ -305,4 +305,44 @@ class TestExpiryPortfolio(unittest.TestCase):
         self.assert_simulation_equal(sim_res, exp_sim_res)
 
     def test_simulation_fungible_reinvest_futures(self):
-        pass
+        RISK_TARGET = 0.12
+        portfolio = self.make_portfolio(["ES"])
+        sig_val = 1
+        signal = self.make_signal(portfolio) * sig_val
+
+        sim_res = portfolio.simulate(signal, tradeables=False, reinvest=True,
+                                     risk_target=RISK_TARGET)
+
+        rets = self.splice_returns(
+            [("ESH2015", "2015-01-02", "2015-03-17"),
+             ("ESM2015", "2015-03-18", "2015-03-23")]
+        )
+        rets.iloc[0] = 0
+        es_hlds1 = (1 + rets.loc[:"2015-03-17"]).cumprod() * self.CAPITAL * sig_val * RISK_TARGET  # NOQA
+        NEW_CAPITAL = es_hlds1.diff().sum() + self.CAPITAL
+        rets2 = rets.loc["2015-03-17":]
+        rets2.iloc[0] = 0
+        es_hlds2 = (1 + rets2.loc["2015-03-17":]).cumprod() * NEW_CAPITAL * sig_val * RISK_TARGET  # NOQA
+        es_hlds = pd.concat([es_hlds1.iloc[:-1], es_hlds2], axis=0)
+        es_hlds = pd.DataFrame(es_hlds)
+        es_hlds.columns = ["ES1"]
+
+        es_pnl = pd.concat([es_hlds1.diff(), es_hlds2.diff().iloc[1:]], axis=0)
+        es_pnl.loc["2015-01-02"] = 0
+        # account for missing settlement pricing data from sources
+        trdble_dates = portfolio.tradeable_dates()
+        hlds_exp = es_hlds.reindex(trdble_dates).fillna(method="ffill")
+        pnls_exp = es_pnl.reindex(trdble_dates).fillna(value=0)
+        pnls_exp.name = None
+
+        es_pre_rebal_hlds = es_hlds1.loc["2015-03-17"]
+        vals = [self.CAPITAL * sig_val * RISK_TARGET,
+                NEW_CAPITAL * sig_val * RISK_TARGET - es_pre_rebal_hlds]
+        trds_exp = pd.DataFrame(
+            vals,
+            index=pd.DatetimeIndex(["2015-01-02", "2015-03-17"]),
+            columns=["ES1"]
+        )
+
+        exp_sim_res = self.make_container(hlds_exp, trds_exp, pnls_exp)
+        self.assert_simulation_equal(sim_res, exp_sim_res)
