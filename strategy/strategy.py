@@ -550,7 +550,10 @@ class Portfolio(metaclass=ABCMeta):
         # data source. This will throw warnings even if user defined adhoc
         # holidays for dates with no pricing
         for ast, exch in exposures.meta_data.loc["exchange"].items():
-            ast_dts = exposures.prices[ast].index.levels[0]
+            try:
+                ast_dts = exposures.prices[ast].index.levels[0]
+            except AttributeError:
+                ast_dts = exposures.prices[ast].index
             exch_dts = calendar_schedules[exch].index
             missing_dts = exch_dts.difference(ast_dts)
 
