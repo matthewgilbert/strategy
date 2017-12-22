@@ -20,6 +20,8 @@ class TestExpiryPortfolio(unittest.TestCase):
         self.metadata = os.path.join(cdir, 'marketdata',
                                      'instrument_meta.json')
         self.CAPITAL = 1000000
+        self.sd = pd.Timestamp("2015-01-02")
+        self.ed = pd.Timestamp("2015-03-23")
 
     def tearDown(self):
         pass
@@ -46,12 +48,10 @@ class TestExpiryPortfolio(unittest.TestCase):
         if not isinstance(exposures, Exposures):
             exposures = self.make_exposures(exposures)
 
-        sd = pd.Timestamp("2015-01-02")
-        ed = pd.Timestamp("2015-03-23")
         init_capital = self.CAPITAL
 
         portfolio = ExpiryPortfolio(offset, all_monthly, exposures,
-                                    sd, ed, init_capital, **kwargs)
+                                    self.sd, self.ed, init_capital, **kwargs)
         return portfolio
 
     @staticmethod
@@ -350,3 +350,13 @@ class TestExpiryPortfolio(unittest.TestCase):
 
         exp_sim_res = self.make_container(hlds_exp, trds_exp, pnls_exp)
         self.assert_simulation_equal(sim_res, exp_sim_res)
+
+    def test_rebalance_dates_instruments_error(self):
+        portfolio = self.make_portfolio(["ES"])
+        rebal_dts = pd.DatetimeIndex([])
+        weights = portfolio.instrument_weights()
+
+        def raise_value_error():
+            portfolio._validate_weights_and_rebalances(weights, rebal_dts)
+
+        self.assertRaises(ValueError, raise_value_error)
