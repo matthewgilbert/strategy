@@ -852,7 +852,10 @@ class Portfolio(metaclass=ABCMeta):
             req_price_dts = signal.loc[rebal_dates, ast].dropna().index
             if ast in futures:
                 ast = self._exposures.generic_to_root([ast])[0]
-            price_dts = self._exposures.prices[ast].index.levels[0]
+            try:
+                price_dts = self._exposures.prices[ast].index.levels[0]
+            except AttributeError:
+                price_dts = self._exposures.prices[ast].index
             isin = req_price_dts.isin(price_dts)
             if not isin.all():
                 raise ValueError("Price data in Exposures contained within "
