@@ -530,8 +530,8 @@ class Portfolio(metaclass=ABCMeta):
         """
 
         self._exposures = exposures
-        self._start_date = start_date
-        self._end_date = end_date
+        self._start_date = pd.Timestamp(start_date)
+        self._end_date = pd.Timestamp(end_date)
         self._capital = initial_capital
 
         if get_calendar is None:
