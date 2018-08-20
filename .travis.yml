@@ -25,7 +25,8 @@ install:
   - conda create -q -n test-environment python=$TRAVIS_PYTHON_VERSION pip pandas numpy pytest
   - source activate test-environment
   - pip install pandas_market_calendars
-  - pip install mapping
+  - pip install git+git://github.com/matthewgilbert/mapping.git@master
+
   - pip install coveralls
   - pip install flake8
   - pip install pytest-cov

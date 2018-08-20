@@ -7,6 +7,7 @@ help:
 
 lint:
 	flake8 ./strategy
+	flake8 ./tests
 
 test:
 	pytest tests -v --cov=strategy --cov-report term-missing
