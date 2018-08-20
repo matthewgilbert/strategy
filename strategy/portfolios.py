@@ -119,8 +119,8 @@ class ExpiryPortfolio(strategy.Portfolio):
         rebal_dates = pd.DatetimeIndex(rebal_dates).unique().sort_values()
         rebal_dates = rebal_dates[rebal_dates >= self._start_date]
         rebal_dates = rebal_dates[rebal_dates <= self._end_date]
-        first_date = np.busday_offset(self._start_date, 0, roll="following",
-                                      holidays=holidays)
+        first_date = np.busday_offset(self._start_date.date(), 0,
+                                      roll="following", holidays=holidays)
         rebal_dates = rebal_dates.union([first_date])
 
         return rebal_dates
