@@ -18,6 +18,16 @@ from abc import ABCMeta, abstractmethod
 WARNINGS = "default"
 
 
+# non vectorized, related to
+# https://github.com/pandas-dev/pandas/issues/21200
+if pd.__version__.startswith("0.23."):
+    def calc_returns(s):
+        return s.groupby(level=1).apply(lambda x: x.pct_change())
+else:
+    def calc_returns(s):
+        return s.groupby(level=1).pct_change()
+
+
 class Exposures():
     """
     A data container for market data on equities and futures instruments.
@@ -752,8 +762,7 @@ class Portfolio(metaclass=ABCMeta):
 
         irets = {}
         for ast in self._exposures.root_futures:
-            irets[ast] = (self._exposures.prices[ast].settle
-                          .groupby(level=1).pct_change())
+            irets[ast] = calc_returns(self._exposures.prices[ast].settle)
 
         if irets:
             weights = self.instrument_weights()

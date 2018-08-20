@@ -2,6 +2,7 @@ from strategy.portfolios import ExpiryPortfolio
 from strategy.strategy import Exposures
 import strategy.strategy as strat
 import pandas as pd
+import numpy as np
 import unittest
 from collections import namedtuple
 import os
@@ -350,3 +351,14 @@ class TestExpiryPortfolio(unittest.TestCase):
 
         exp_sim_res = self.make_container(hlds_exp, trds_exp, pnls_exp)
         self.assert_simulation_equal(sim_res, exp_sim_res)
+
+    def test_return_calculations(self):
+        # https://github.com/pandas-dev/pandas/issues/21200
+        idx = pd.MultiIndex.from_product(
+            [pd.date_range("2015-01-01", "2015-01-03"), ["A1", "A2"]]
+        )
+        s = pd.Series([1, 3, 1.5, 1.5, 3, 4.5], index=idx)
+
+        rets = strat.calc_returns(s)
+        rets_exp = pd.Series([np.NaN, np.NaN, 0.5, -0.5, 1, 2], index=idx)
+        assert_series_equal(rets, rets_exp)
