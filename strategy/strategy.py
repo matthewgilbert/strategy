@@ -28,6 +28,12 @@ else:
         return s.groupby(level=1).pct_change()
 
 
+def calc_instr_returns(s, index, limit):
+    s = mp.util.reindex(s, index, limit)
+    rets = calc_returns(s).reindex(index)
+    return rets
+
+
 class Exposures():
     """
     A data container for market data on equities and futures instruments.
@@ -759,13 +765,16 @@ class Portfolio(metaclass=ABCMeta):
         -------
         pandas.DataFrame of returns
         """
-
         irets = {}
-        for ast in self._exposures.root_futures:
-            irets[ast] = calc_returns(self._exposures.prices[ast].settle)
-
-        if irets:
+        if len(self._exposures.root_futures) > 0:
             weights = self.instrument_weights()
+
+        for ast in self._exposures.root_futures:
+            widx = weights[ast].index
+            irets[ast] = calc_instr_returns(
+                self._exposures.prices[ast].settle, widx, limit=0
+            )
+        if irets:
             futures_crets = mp.util.calc_rets(irets, weights)
         else:
             futures_crets = None
