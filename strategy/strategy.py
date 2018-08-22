@@ -546,8 +546,8 @@ class Portfolio(metaclass=ABCMeta):
         """
 
         self._exposures = exposures
-        self._start_date = start_date
-        self._end_date = end_date
+        self._start_date = pd.Timestamp(start_date)
+        self._end_date = pd.Timestamp(end_date)
         self._capital = initial_capital
 
         if get_calendar is None:
@@ -566,7 +566,10 @@ class Portfolio(metaclass=ABCMeta):
         # data source. This will throw warnings even if user defined adhoc
         # holidays for dates with no pricing
         for ast, exch in exposures.meta_data.loc["exchange"].items():
-            ast_dts = exposures.prices[ast].index.levels[0]
+            try:
+                ast_dts = exposures.prices[ast].index.levels[0]
+            except AttributeError:
+                ast_dts = exposures.prices[ast].index
             exch_dts = calendar_schedules[exch].index
             missing_dts = exch_dts.difference(ast_dts)
 
@@ -795,6 +798,25 @@ class Portfolio(metaclass=ABCMeta):
         crets = crets.sort_index(axis=1)
         return crets.loc[self.tradeable_dates(), :]
 
+    @staticmethod
+    def _validate_weights_and_rebalances(weights, rebalance_dates):
+        # validate that transitions in instrument weights are in rebal_dates
+        for root_generic in weights:
+            wts = weights[root_generic]
+            wts = wts.sort_index().reset_index(level="contract")
+            # check if underlying transition matrix is different
+            trans = (wts.groupby("date").apply(lambda x: x.values))
+            trans_next = trans.shift(-1).ffill()
+            changes = ~np.vectorize(np.array_equal)(trans, trans_next)
+            instr_dts = wts.index.unique()
+            chng_dts = instr_dts[changes]
+            invalid_dates = chng_dts.difference(rebalance_dates)
+            if not invalid_dates.empty:
+                msg = ("{0} has instrument weights which transition on dates "
+                       "which are not rebalance dates:\n{1}"
+                       .format(root_generic, invalid_dates))
+                raise ValueError(msg)
+
     def simulate(self, signal, tradeables=False, rounder=None,
                  reinvest=True, risk_target=0.12):
         """
@@ -848,7 +870,10 @@ class Portfolio(metaclass=ABCMeta):
             req_price_dts = signal.loc[rebal_dates, ast].dropna().index
             if ast in futures:
                 ast = self._exposures.generic_to_root([ast])[0]
-            price_dts = self._exposures.prices[ast].index.levels[0]
+            try:
+                price_dts = self._exposures.prices[ast].index.levels[0]
+            except AttributeError:
+                price_dts = self._exposures.prices[ast].index
             isin = req_price_dts.isin(price_dts)
             if not isin.all():
                 raise ValueError("Price data in Exposures contained within "
@@ -856,6 +881,9 @@ class Portfolio(metaclass=ABCMeta):
                                  "'rebalance_dates' when 'signal' is "
                                  "not NaN, {0} needs prices for:"
                                  "\n{1}\n".format(ast, req_price_dts[~isin]))
+
+        weights = self.instrument_weights()
+        self._validate_weights_and_rebalances(weights, rebal_dates)
 
         returns = self.continuous_rets()
         capital = self._capital
@@ -867,7 +895,6 @@ class Portfolio(metaclass=ABCMeta):
         returns = returns.fillna(value=0)
         pnls = []
         crnt_instrs = 0
-        weights = self.instrument_weights()
         tradeable_dates = self.tradeable_dates()
         for i, dt in enumerate(tradeable_dates):
             # exposure from time dt - 1

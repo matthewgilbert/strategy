@@ -2,7 +2,7 @@ import pandas as pd
 import os
 from collections import namedtuple
 from strategy.strategy import Exposures
-from strategy.portfolios import ExpiryPortfolio
+from strategy.portfolios import ExpiryPortfolio, FixedFrequencyPortfolio
 
 
 def make_container(holdings, trades, pnl):
@@ -19,6 +19,14 @@ def make_portfolio(exposures, sd, ed, capital, offset=-3, all_monthly=False,
 
     portfolio = ExpiryPortfolio(
         offset, all_monthly, exposures, sd, ed, capital, **kwargs
+    )
+    return portfolio
+
+
+def make_frequency_portfolio(frequency, offset, exposures, sd, ed, **kwargs):
+    portfolio = FixedFrequencyPortfolio(
+        frequency, offset, exposures=exposures, start_date=sd, end_date=ed,
+        **kwargs
     )
     return portfolio
 

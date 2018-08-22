@@ -27,9 +27,9 @@ class TestExpiryPortfolio(unittest.TestCase):
 
     def assert_simulation_equal(self, sim1, sim2):
         self.assertEquals(sim1._fields, sim2._fields)
-        assert_frame_equal(sim1.holdings, sim2.holdings, check_exact=False)
-        assert_frame_equal(sim1.trades, sim2.trades, check_exact=False)
-        assert_series_equal(sim1.pnl, sim2.pnl, check_exact=False)
+        assert_frame_equal(sim1.holdings, sim2.holdings)
+        assert_frame_equal(sim1.trades, sim2.trades)
+        assert_series_equal(sim1.pnl, sim2.pnl)
 
     def test_rebalance_dates(self):
         # each contract rolling individually, same offset
@@ -310,3 +310,97 @@ class TestExpiryPortfolio(unittest.TestCase):
         rets = strat.calc_returns(s)
         rets_exp = pd.Series([np.NaN, np.NaN, 0.5, -0.5, 1, 2], index=idx)
         assert_series_equal(rets, rets_exp)
+
+    def test_rebalance_dates_instruments_error(self):
+        # test for https://github.com/matthewgilbert/strategy/issues/3
+        exposures = util.make_exposures(["ES"], self.metadata, self.marketdata)
+        portfolio = util.make_portfolio(
+            exposures, self.sd, self.ed, self.CAPITAL
+        )
+        rebal_dts = pd.DatetimeIndex([])
+        weights = portfolio.instrument_weights()
+
+        def raise_value_error():
+            portfolio._validate_weights_and_rebalances(weights, rebal_dts)
+
+        self.assertRaises(ValueError, raise_value_error)
+
+    def test_fixed_frequency_dates(self):
+        exposures = util.make_exposures(
+            ["XIV"], self.metadata, self.marketdata
+        )
+        port = util.make_frequency_portfolio(
+            "monthly", -3, exposures, "2015-01-17", "2015-01-28"
+        )
+        dts = port.rebalance_dates()
+        exp_dts = pd.DatetimeIndex(["2015-01-17", "2015-01-28"])
+        assert_index_equal(dts, exp_dts)
+
+        port = util.make_frequency_portfolio(
+            "monthly", -3, exposures, "2015-01-17", "2015-02-28"
+        )
+        dts = port.rebalance_dates()
+        exp_dts = pd.DatetimeIndex(["2015-01-17", "2015-01-28", "2015-02-25"])
+        assert_index_equal(dts, exp_dts)
+
+        port = util.make_frequency_portfolio(
+            "monthly", [-3, -1], exposures, "2015-01-17", "2015-01-30"
+        )
+        dts = port.rebalance_dates()
+        exp_dts = pd.DatetimeIndex(["2015-01-17", "2015-01-28", "2015-01-30"])
+        assert_index_equal(dts, exp_dts)
+
+        port = util.make_frequency_portfolio(
+            "weekly", [0, 2], exposures, "2015-01-02", "2015-01-13"
+        )
+        dts = port.rebalance_dates()
+        exp_dts = pd.DatetimeIndex(["2015-01-02", "2015-01-05", "2015-01-07",
+                                    "2015-01-12"])
+        assert_index_equal(dts, exp_dts)
+
+    def test_simulation_fungible_equity(self):
+        RISK_TARGET = 0.12
+        exposures = util.make_exposures(
+            ["XIV"], self.metadata, self.marketdata
+        )
+        sd = pd.Timestamp("2015-01-02")
+        ed = pd.Timestamp("2015-01-13")
+        portfolio = util.make_frequency_portfolio(
+            "weekly", -1, exposures, sd, ed, initial_capital=self.CAPITAL
+        )
+        sig_val = 1
+        signal = util.make_signal(portfolio) * sig_val
+
+        sim_res = portfolio.simulate(signal, tradeables=False, reinvest=False,
+                                     risk_target=RISK_TARGET)
+
+        fn = os.path.join(self.marketdata, "XIV", "XIV" + ".csv")
+        prices = pd.read_csv(fn, parse_dates=True, index_col=0)
+        prices.sort_index(inplace=True)
+        prices = prices.loc[:, "Adj Close"]
+        rets = prices.loc[sd:ed].pct_change()
+        rets.iloc[0] = 0
+
+        hlds_exp1 = (1 + rets.loc[:"2015-01-09"]).cumprod() * self.CAPITAL * sig_val * RISK_TARGET  # NOQA
+        rets.loc["2015-01-09"] = 0
+        hlds_exp2 = (1 + rets.loc["2015-01-09":]).cumprod() * self.CAPITAL * sig_val * RISK_TARGET  # NOQA
+        pnls_exp = pd.concat([hlds_exp1.diff(), hlds_exp2.diff().iloc[1:]],
+                             axis=0)
+        pnls_exp.loc["2015-01-02"] = 0
+        pnls_exp.index.names = [None]
+        pnls_exp.name = None
+
+        hlds_exp = pd.concat([hlds_exp1.iloc[:-1], hlds_exp2], axis=0)
+        hlds_exp = hlds_exp.to_frame(name="XIV")
+        hlds_exp.index.names = [None]
+
+        trd1 = self.CAPITAL * 0.12
+        trd2 = self.CAPITAL * 0.12 - hlds_exp1.loc["2015-01-09"]
+        trds_exp = pd.DataFrame(
+            [trd1, trd2],
+            index=pd.DatetimeIndex(["2015-01-02", "2015-01-09"]),
+            columns=["XIV"]
+        )
+
+        exp_sim_res = util.make_container(hlds_exp, trds_exp, pnls_exp)
+        self.assert_simulation_equal(sim_res, exp_sim_res)

@@ -152,3 +152,71 @@ class DailyRebalancePortfolio(ExpiryPortfolio):
         pandas.DatetimeIndex
         """
         return self.tradeable_dates()
+
+
+class FixedFrequencyPortfolio(strategy.Portfolio):
+    __doc__ = (strategy.Portfolio.__doc__ +
+               '\nThis is a concrete implementation for equities. There '
+               'are no instrument\nweights and the rebalance is based on a '
+               'fixed frequency')
+
+    # better to find a DRY method for docstring
+    def __init__(self, frequency, offset, *args, **kwargs):
+        """
+        Parameters:
+        -----------
+        frequency: string
+            Fixed frequency for reblance, supports {"weekly", "monthly"}
+        offset: int or list
+            Relative offsets based on the frequency. E.g. [0, 1] for weekly
+            gives the first two days of the week, [-5] for monthly gives the
+            fifth last day of the month.
+        exposures: Exposures
+            An Exposures instance containing the asset exposures for trading
+            and backtesting
+        start_date: pandas.Timestamp
+            First allowable date when running portfolio simulations
+        end_date: pandas.Timestamp
+            Last allowable date when running portfolio simulations
+        initial_capital: float
+            Starting capital for backtest
+        get_calendar: function
+            Map which takes an exchange name as a string and returns an
+            instance of a pandas_market_calendars.MarketCalendar. Default is
+            pandas_market_calendars.get_calendar
+        holidays: list
+            list of timezone aware pd.Timestamps used for holidays in addition
+            to exchange holidays associated with instruments
+        """
+        if frequency not in ["weekly", "monthly"]:
+            raise ValueError("Unknown frequency: {0}".format(frequency))
+        super(FixedFrequencyPortfolio, self).__init__(*args, **kwargs)
+        self._frequency = frequency
+        self._offset = offset
+
+    def rebalance_dates(self):
+        holidays = self.holidays()
+        if self._frequency == "monthly":
+            groups = ["year", "month"]
+            sd = self._start_date - pd.offsets.MonthBegin(1)
+            ed = self._end_date + pd.offsets.MonthEnd(1)
+            dts = pd.date_range(start=sd, end=ed, freq=holidays)
+            dts = pd.DataFrame({"date": dts, "month": dts.month,
+                               "year": dts.year})
+        elif self._frequency == "weekly":
+            groups = ["weekofyear"]
+            sd = self._start_date - pd.Timedelta(self._start_date.dayofweek,
+                                                 unit='D')
+            ed = self._end_date + pd.Timedelta(6 - self._end_date.dayofweek,
+                                               unit='D')
+            dts = pd.date_range(start=sd, end=ed, freq=holidays)
+            dts = pd.DataFrame({"date": dts, "weekofyear": dts.weekofyear})
+
+        dts = dts.groupby(groups).apply(lambda x: x.iloc[self._offset])
+        dts = pd.DatetimeIndex(dts.loc[:, "date"].reset_index(drop=True))
+        dts = dts[(dts > self._start_date) & (dts <= self._end_date)]
+        dts = pd.DatetimeIndex([self._start_date]).append(dts)
+        return dts
+
+    def instrument_weights(self):
+        return {}
