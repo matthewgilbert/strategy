@@ -11,7 +11,6 @@ import datetime
 import re
 import warnings
 import pandas_market_calendars as mcal
-from abc import ABCMeta, abstractmethod
 
 # control data warnings in object instantation, see
 # https://docs.python.org/3/library/warnings.html#the-warnings-filter
@@ -513,7 +512,7 @@ class Exposures():
         return p
 
 
-class Portfolio(metaclass=ABCMeta):
+class Portfolio():
     """
     A Class to manage simulating and generating trades for a trading strategy
     on futures and equities. The main features include:
@@ -522,14 +521,20 @@ class Portfolio(metaclass=ABCMeta):
         - managing instrument holiday calendars
     """
 
-    def __init__(self, exposures, start_date, end_date,
-                 initial_capital=100000, get_calendar=None, holidays=None):
+    def __init__(self, exposures, rebalance_dates, instrument_weights,
+                 start_date, end_date, initial_capital=100000,
+                 get_calendar=None, holidays=None):
         """
         Parameters:
         -----------
         exposures: Exposures
             An Exposures instance containing the asset exposures for trading
             and backtesting
+        rebalance_dates: pd.DatetimeIndex
+            Dates on which to rebalance
+        instrument_weights: dictionary
+            Dictionary of DataFrames of instrument weights for each root
+            generic defining roll rules.
         start_date: pandas.Timestamp
             First allowable date when running portfolio simulations
         end_date: pandas.Timestamp
@@ -549,6 +554,12 @@ class Portfolio(metaclass=ABCMeta):
         self._start_date = pd.Timestamp(start_date)
         self._end_date = pd.Timestamp(end_date)
         self._capital = initial_capital
+
+        self._validate_weights_and_rebalances(
+            instrument_weights, rebalance_dates
+        )
+        self._rebalance_dates = rebalance_dates
+        self._instrument_weights = instrument_weights
 
         if get_calendar is None:
             get_calendar = mcal.get_calendar
@@ -713,7 +724,7 @@ class Portfolio(metaclass=ABCMeta):
 
         return instruments.loc[futs], instruments.loc[eqts]
 
-    @abstractmethod
+    @property
     def rebalance_dates(self):
         """
         Rebalance days for trading strategy
@@ -722,26 +733,20 @@ class Portfolio(metaclass=ABCMeta):
         -------
         pandas.DatetimeIndex
         """
-        raise NotImplementedError()
+        return self._rebalance_dates
 
-    @abstractmethod
-    def instrument_weights(self, dates=None):
+    @property
+    def instrument_weights(self):
         """
         Dictionary of instrument weights for each root generic defining roll
         rules for given dates.
-
-        Parameters:
-        -----------
-        dates: iterable
-            iterable of pandas.Timestamps, if None then self.tradeable_dates()
-            is used.
 
         Returns
         -------
         A dictionary of DataFrames of instrument weights indexed by root
         generic, see mapper.mappings.roller()
         """
-        raise NotImplementedError()
+        return self._instrument_weights
 
     def generic_durations(self):
         """
@@ -750,7 +755,7 @@ class Portfolio(metaclass=ABCMeta):
 
         See also: mapping.util.weighted_expiration()
         """
-        wts = self.instrument_weights()
+        wts = self.instrument_weights
         ltd = self._exposures.expiries.set_index("contract").loc[:, "last_trade"]  # NOQA
         durations = {}
         for generic in wts:
@@ -770,7 +775,7 @@ class Portfolio(metaclass=ABCMeta):
         """
         irets = {}
         if len(self._exposures.root_futures) > 0:
-            weights = self.instrument_weights()
+            weights = self.instrument_weights
 
         for ast in self._exposures.root_futures:
             widx = weights[ast].index
@@ -856,7 +861,7 @@ class Portfolio(metaclass=ABCMeta):
 
         # validate signal data prior to running a simulation, avoid slow
         # runtime error
-        rebal_dates = self.rebalance_dates()
+        rebal_dates = self.rebalance_dates
         missing = ~rebal_dates.isin(signal.index)
         if missing.any():
             raise ValueError("'signal' must contain values for "
@@ -881,9 +886,6 @@ class Portfolio(metaclass=ABCMeta):
                                  "'rebalance_dates' when 'signal' is "
                                  "not NaN, {0} needs prices for:"
                                  "\n{1}\n".format(ast, req_price_dts[~isin]))
-
-        weights = self.instrument_weights()
-        self._validate_weights_and_rebalances(weights, rebal_dates)
 
         returns = self.continuous_rets()
         capital = self._capital
@@ -918,10 +920,10 @@ class Portfolio(metaclass=ABCMeta):
                     # see https://github.com/matthewgilbert/strategy/issues/1
                     dt_next = tradeable_dates[i + 1]
                     trds = self.trade(dt_next, crnt_instrs, sig_t, prices_t,
-                                      capital, risk_target, rounder, weights)
+                                      capital, risk_target, rounder)
 
                     new_exp = self.notional_exposure(dt_next, crnt_instrs,
-                                                     trds, prices_t, weights)
+                                                     trds, prices_t)
                     # account for fact that 'trds' mapped to 'new_exp'
                     # (generic notionals) might not span all previous generic
                     # holdings, which should be interpreted as having 0
@@ -956,7 +958,7 @@ class Portfolio(metaclass=ABCMeta):
         return container(notional_exposures, trades, pnls)
 
     def trade(self, date, instrument_holdings, unit_risk_exposures, prices,
-              capital, risk_target, rounder=None, weights=None):
+              capital, risk_target, rounder=None):
         """
         Generate instrument trade list.
 
@@ -978,12 +980,6 @@ class Portfolio(metaclass=ABCMeta):
         rounder: function
             Function to round pd.Series contracts to integers, if None default
             pd.Series.round is used.
-        weights: dict
-            A dict of DataFrames of instrument weights with a MultiIndex where
-            the top level contains pandas.Timestamps and the second level is
-            instrument names. The columns consist of generic names. Keys should
-            be for different root generics, e.g. 'ES'
-
 
         Returns:
         --------
@@ -993,8 +989,9 @@ class Portfolio(metaclass=ABCMeta):
         if rounder is None:
             rounder = pd.Series.round
 
-        if weights is None:
-            weights = self.instrument_weights(pd.DatetimeIndex([date]))
+        weights = {}
+        for root in self.instrument_weights:
+            weights[root] = self.instrument_weights[root].loc[[date], :]
 
         # to support passing 0 as a proxy to all empty holdings
         if isinstance(instrument_holdings, pd.Series):
@@ -1026,7 +1023,7 @@ class Portfolio(metaclass=ABCMeta):
         return pd.concat([eq_trades, fut_trds])
 
     def notional_exposure(self, date, current_instruments, instrument_trades,
-                          prices, weights=None):
+                          prices):
         """
         Return generic dollar notional exposures.
 
@@ -1041,18 +1038,14 @@ class Portfolio(metaclass=ABCMeta):
             Instrument trades as integer number of contracts
         prices: pandas.Series
             Prices for instruments to be traded
-        weights: dict
-            A dict of DataFrames of instrument weights with a MultiIndex where
-            the top level contains pandas.Timestamps and the second level is
-            instrument names. The columns consist of generic names. Keys should
-            be for different root generics, e.g. 'ES'
 
         Returns:
         --------
         pd.Series of notional exposures for generic instruments.
         """
-        if weights is None:
-            weights = self.instrument_weights(pd.DatetimeIndex([date]))
+        weights = {}
+        for root in self.instrument_weights:
+            weights[root] = self.instrument_weights[root].loc[[date], :]
 
         if not instrument_trades.index.is_unique:
             raise ValueError('instrument_trades must have unique index')
