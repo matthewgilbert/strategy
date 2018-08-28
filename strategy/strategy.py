@@ -1,16 +1,12 @@
 import pandas as pd
-from pandas.tseries.holiday import AbstractHolidayCalendar
-from pandas.tseries.offsets import CustomBusinessDay
 import numpy as np
 import os
 import mapping as mp
 import json
 import functools
 import collections
-import datetime
 import re
 import warnings
-import pandas_market_calendars as mcal
 
 # control data warnings in object instantation, see
 # https://docs.python.org/3/library/warnings.html#the-warnings-filter
@@ -518,12 +514,10 @@ class Portfolio():
     on futures and equities. The main features include:
         - simulations for trading in notional or discrete instrument size
         - user defined roll rules
-        - managing instrument holiday calendars
     """
 
-    def __init__(self, exposures, rebalance_dates, instrument_weights,
-                 start_date, end_date, initial_capital=100000,
-                 get_calendar=None, holidays=None):
+    def __init__(self, exposures, rebalance_dates, mtm_dates,
+                 instrument_weights, initial_capital=100000):
         """
         Parameters:
         -----------
@@ -532,80 +526,24 @@ class Portfolio():
             and backtesting
         rebalance_dates: pd.DatetimeIndex
             Dates on which to rebalance
+        mtm_dates: pd.DatetimeIndex
+            Dates on which to mark to market the portfolio
         instrument_weights: dictionary
             Dictionary of DataFrames of instrument weights for each root
             generic defining roll rules.
-        start_date: pandas.Timestamp
-            First allowable date when running portfolio simulations
-        end_date: pandas.Timestamp
-            Last allowable date when running portfolio simulations
         initial_capital: float
             Starting capital for backtest
-        get_calendar: function
-            Map which takes an exchange name as a string and returns an
-            instance of a pandas_market_calendars.MarketCalendar. Default is
-            pandas_market_calendars.get_calendar
-        holidays: list
-            list of timezone aware pd.Timestamps used for holidays in addition
-            to exchange holidays associated with instruments
         """
 
         self._exposures = exposures
-        self._start_date = pd.Timestamp(start_date)
-        self._end_date = pd.Timestamp(end_date)
         self._capital = initial_capital
 
         self._validate_weights_and_rebalances(
             instrument_weights, rebalance_dates
         )
         self._rebalance_dates = rebalance_dates
+        self._mtm_dates = mtm_dates
         self._instrument_weights = instrument_weights
-
-        if get_calendar is None:
-            get_calendar = mcal.get_calendar
-
-        calendars = []
-        calendar_schedules = {}
-        for exchange in exposures.meta_data.loc["exchange"].unique():
-            calendar = get_calendar(exchange)
-            calendars.append(calendar)
-            calendar_schedules[exchange] = calendar.schedule(self._start_date,
-                                                             self._end_date)
-
-        # warn user when price data does not exist for dates which are not
-        # known to be exchange holidays, likely an indicator of spotty price
-        # data source. This will throw warnings even if user defined adhoc
-        # holidays for dates with no pricing
-        for ast, exch in exposures.meta_data.loc["exchange"].items():
-            try:
-                ast_dts = exposures.prices[ast].index.levels[0]
-            except AttributeError:
-                ast_dts = exposures.prices[ast].index
-            exch_dts = calendar_schedules[exch].index
-            missing_dts = exch_dts.difference(ast_dts)
-
-            # warn the user if instantiating instance with instruments which
-            # don't have price data consistent with given calendars
-            warning = ""
-            if len(missing_dts) > 0:
-                warning = (warning + "Generic instrument {0} on exchange {1} "
-                           "missing price data for tradeable calendar dates:\n"
-                           "{2}\n".format(ast, exch, missing_dts))
-            if warning:
-                with warnings.catch_warnings():
-                    warnings.simplefilter(WARNINGS)
-                    warnings.warn(warning)
-
-        if holidays:
-            calendar = _AdhocExchangeCalendar(holidays)
-            calendars.append(calendar)
-            calendar_schedules["adhoc"] = calendar.schedule(self._start_date,
-                                                            self._end_date)
-
-        self._calendars = calendars
-        # this is stored as an optimization to avoid having to call
-        # calendar.schedule() again on self._calendars
-        self._calendar_schedules = calendar_schedules
 
     def __repr__(self):
         return (
@@ -617,7 +555,7 @@ class Portfolio():
             "Start: {2}\n"
             "End: {3}\n"
         ).format(self._capital, self._exposures,
-                 self._start_date, self._end_date)
+                 self._rebalance_dates[0], self._rebalance_dates[-1])
 
     @property
     def equities(self):
@@ -632,63 +570,6 @@ class Portfolio():
         Return tuple of generic futures defined in portfolio
         """
         return self._exposures.future_generics
-
-    def tradeable_dates(self, how='all'):
-        """
-        Dates which are tradeable based on the calendars for the exchanges that
-        the set of instruments in the portfolio trade on.
-
-        Parameters:
-        -----------
-            how: {'all', 'any'}, default 'all'
-               * all: all instruments must be tradeable for date to be included
-               * any: any instrument must be tradeable for date to be included
-
-        Returns:
-        --------
-        DatetimeIndex of tradeable dates
-        """
-
-        how = {"all": "inner", "any": "outer"}[how]
-
-        sched = self.schedule(how)
-        return sched.index
-        # schedule_dates = mcal.date_range(sched, frequency='1D')
-        # return schedule_dates
-
-    def schedule(self, how="inner"):
-        """
-        Merge schedule DataFrames from instrument calendars
-
-        how: {'outer', 'inner'}
-            How to merge calendars, see pandas_market_calendars.merge_schedules
-
-        Returns:
-        --------
-        pandas.DataFrame schedule
-        """
-        return self._schedule(how)
-
-    @functools.lru_cache()
-    def _schedule(self, how):
-        schedules = list(self._calendar_schedules.values())
-        return mcal.merge_schedules(schedules, how=how)
-
-    def holidays(self):
-        """
-        pd.CumstomBusinessDay of union of all holidays for underlying calendars
-        """
-        adhoc_holidays = []
-        calendar = AbstractHolidayCalendar()
-        for cal in self._calendars:
-            adhoc_holidays = np.union1d(adhoc_holidays, cal.adhoc_holidays)
-            calendar = AbstractHolidayCalendar(
-                rules=calendar.merge(cal.regular_holidays)
-            )
-        return CustomBusinessDay(
-            holidays=adhoc_holidays.tolist(),
-            calendar=calendar
-        )
 
     def _split_and_check_generics(self, generics):
         if isinstance(generics, pd.Series):
@@ -727,13 +608,24 @@ class Portfolio():
     @property
     def rebalance_dates(self):
         """
-        Rebalance days for trading strategy
+        Rebalance days for trading strategy.
 
         Returns
         -------
         pandas.DatetimeIndex
         """
         return self._rebalance_dates
+
+    @property
+    def mtm_dates(self):
+        """
+        Days for marking to market trading strategy.
+
+        Returns:
+        --------
+        pandas.DatetimeIndex
+        """
+        return self._mtm_dates
 
     @property
     def instrument_weights(self):
@@ -801,7 +693,7 @@ class Portfolio():
 
         crets = pd.concat([futures_crets, equity_rets], axis=1)
         crets = crets.sort_index(axis=1)
-        return crets.loc[self.tradeable_dates(), :]
+        return crets.loc[self.mtm_dates, :]
 
     @staticmethod
     def _validate_weights_and_rebalances(weights, rebalance_dates):
@@ -827,7 +719,7 @@ class Portfolio():
         """
         Simulate trading strategy with or without discrete trade sizes and
         revinvested. Holdings are marked to market for each day in
-        tradeable_dates().
+        mtm_dates.
 
         Parameters
         ----------
@@ -897,7 +789,7 @@ class Portfolio():
         returns = returns.fillna(value=0)
         pnls = []
         crnt_instrs = 0
-        tradeable_dates = self.tradeable_dates()
+        tradeable_dates = self.mtm_dates
         for i, dt in enumerate(tradeable_dates):
             # exposure from time dt - 1
             daily_pnl = (current_exp * returns.loc[dt]).sum()
@@ -1101,40 +993,3 @@ class Portfolio():
 
         trades.index = new_index
         return trades
-
-
-class _AdhocExchangeCalendar(mcal.MarketCalendar):
-    """
-    Dummy exchange calendar for storing adhoc holidays not associated with any
-    particular exchange
-    """
-
-    def __init__(self, adhoc_holidays, *args, **kwargs):
-        # adhoc_holidays should be a list-like of pandas.Timestamps for
-        # holidays
-        super(_AdhocExchangeCalendar, self).__init__(*args, **kwargs)
-        self._adhoc_holidays = tuple(adhoc_holidays)
-
-    @property
-    def name(self):
-        return "Adhoc"
-
-    @property
-    def tz(self):
-        return "UTC"
-
-    @property
-    def adhoc_holidays(self):
-        return list(self._adhoc_holidays)
-
-    @property
-    def regular_holidays(self):
-        return AbstractHolidayCalendar()
-
-    @property
-    def open_time_default(self):
-        return datetime.time(17, 1)
-
-    @property
-    def close_time_default(self):
-        return datetime.time(17)
