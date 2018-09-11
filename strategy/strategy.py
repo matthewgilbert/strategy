@@ -508,6 +508,41 @@ class Exposures():
         return p
 
 
+def validate_weights_and_rebalances(instrument_weights, rebalance_dates):
+    """
+    Validate that the rebalance dates are compatible with the instrument
+    weights by checking that the set of roll periods implied by the instrument
+    weights are contained in the rebalance dates. Raise a ValueError if not
+    compatible.
+
+    Parameters
+    ----------
+    instrument_weights: dictionary
+        Dictionary of DataFrames of instrument weights for each root
+        generic defining roll rules.
+    rebalance_dates: pd.DatetimeIndex
+            Dates on which to rebalance
+    """
+
+    # relates to Relates to https://github.com/matthewgilbert/strategy/issues/3
+    # validate that transitions in instrument weights are in rebal_dates
+    for root_generic in instrument_weights:
+        wts = instrument_weights[root_generic]
+        wts = wts.sort_index().reset_index(level="contract")
+        # check if underlying transition matrix is different
+        trans = (wts.groupby("date").apply(lambda x: x.values))
+        trans_next = trans.shift(-1).ffill()
+        changes = ~np.vectorize(np.array_equal)(trans, trans_next)
+        instr_dts = wts.index.unique()
+        chng_dts = instr_dts[changes]
+        invalid_dates = chng_dts.difference(rebalance_dates)
+        if not invalid_dates.empty:
+            msg = ("instrument_weights['{0}'] has transition on dates "
+                   "which are not rebalance dates:\n{1}"
+                   .format(root_generic, invalid_dates))
+            raise ValueError(msg)
+
+
 class Portfolio():
     """
     A Class to manage simulating and generating trades for a trading strategy
@@ -538,9 +573,7 @@ class Portfolio():
         self._exposures = exposures
         self._capital = initial_capital
 
-        self._validate_weights_and_rebalances(
-            instrument_weights, rebalance_dates
-        )
+        validate_weights_and_rebalances(instrument_weights, rebalance_dates)
         self._rebalance_dates = rebalance_dates
         self._mtm_dates = mtm_dates
         self._instrument_weights = instrument_weights
@@ -694,25 +727,6 @@ class Portfolio():
         crets = pd.concat([futures_crets, equity_rets], axis=1)
         crets = crets.sort_index(axis=1)
         return crets.loc[self.mtm_dates, :]
-
-    @staticmethod
-    def _validate_weights_and_rebalances(weights, rebalance_dates):
-        # validate that transitions in instrument weights are in rebal_dates
-        for root_generic in weights:
-            wts = weights[root_generic]
-            wts = wts.sort_index().reset_index(level="contract")
-            # check if underlying transition matrix is different
-            trans = (wts.groupby("date").apply(lambda x: x.values))
-            trans_next = trans.shift(-1).ffill()
-            changes = ~np.vectorize(np.array_equal)(trans, trans_next)
-            instr_dts = wts.index.unique()
-            chng_dts = instr_dts[changes]
-            invalid_dates = chng_dts.difference(rebalance_dates)
-            if not invalid_dates.empty:
-                msg = ("{0} has instrument weights which transition on dates "
-                       "which are not rebalance dates:\n{1}"
-                       .format(root_generic, invalid_dates))
-                raise ValueError(msg)
 
     def simulate(self, signal, tradeables=False, rounder=None,
                  reinvest=True, risk_target=0.12):
