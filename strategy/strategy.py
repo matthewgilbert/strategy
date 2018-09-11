@@ -839,7 +839,7 @@ class Portfolio():
                     # current_exp and new_exp might differ by epsilon because
                     # current_exp is based on compounded returns vs current
                     # prices
-                    trd_ntl = (new_exp - current_exp).round(2)
+                    trd_ntl = (new_exp - current_exp).round(4)
                     current_exp = new_exp
                     crnt_instrs = trds.add(crnt_instrs, fill_value=0)
                     crnt_instrs = crnt_instrs.loc[crnt_instrs != 0]

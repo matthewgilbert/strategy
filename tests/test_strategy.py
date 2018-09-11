@@ -99,7 +99,7 @@ def test_simulation_tradeable_futures(metadata, marketdata, sd, ed,
 
     rebal_dts = portfolio.rebalance_dates
     trds_exp = pd.DataFrame([[es1, ty1], [0.0, ty2], [es2, 0.0]],
-                            index=rebal_dts, columns=["ES1", "TY1"]).round(2)  # NOQA
+                            index=rebal_dts, columns=["ES1", "TY1"]).round(4)  # NOQA
 
     exp_sim_res = util.make_container(hlds_exp, trds_exp, pnls_exp)
     assert_simulation_equal(sim_res, exp_sim_res)
@@ -167,7 +167,7 @@ def test_simulation_tradeable_futures_multiple_generics(
     rebal_dts = portfolio.rebalance_dates
     trds_exp = pd.DataFrame([[es_t1, ty_t1, ty2_t1], [0.0, ty_t2, ty2_t2],
                              [es_t3, 0.0, 0.0]], index=rebal_dts,
-                            columns=["ES1", "TY1", 'TY2']).round(2)
+                            columns=["ES1", "TY1", 'TY2']).round(4)
 
     exp_sim_res = util.make_container(hlds_exp, trds_exp, pnls_exp)
     assert_simulation_equal(sim_res, exp_sim_res)
