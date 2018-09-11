@@ -1,8 +1,10 @@
 import pandas as pd
 import os
 from collections import namedtuple
-from strategy.strategy import Exposures
-from strategy.portfolios import ExpiryPortfolio, FixedFrequencyPortfolio
+from strategy.strategy import Exposures, Portfolio
+from strategy.rebalance import get_relative_to_expiry_instrument_weights, \
+    get_relative_to_expiry_rebalance_dates, get_fixed_frequency_rebalance_dates
+from strategy.calendar import get_mtm_dates
 
 
 def make_container(holdings, trades, pnl):
@@ -14,26 +16,42 @@ def make_exposures(root_generics, meta_fp, market_fp):
     return Exposures.from_folder(meta_fp, market_fp, root_generics)
 
 
-def make_portfolio(exposures, sd, ed, capital, offset=-3, all_monthly=False,
-                   **kwargs):
+def make_portfolio(exposures, sd, ed, capital, offset, all_monthly=False,
+                   holidays=None):
 
-    portfolio = ExpiryPortfolio(
-        offset, all_monthly, exposures, sd, ed, capital, **kwargs
+    rebal_dts = get_relative_to_expiry_rebalance_dates(
+        sd, ed, exposures.expiries, offset, all_monthly=all_monthly
+    )
+    exchanges = exposures.meta_data.loc["exchange", :].unique()
+    mtm_dates = get_mtm_dates(sd, ed, exchanges, holidays=holidays)
+    root_generics = exposures.future_root_and_generics
+    wts = get_relative_to_expiry_instrument_weights(
+        mtm_dates, root_generics, exposures.expiries, offset,
+        all_monthly=all_monthly
+    )
+    portfolio = Portfolio(
+        exposures, rebal_dts, mtm_dates, wts, initial_capital=capital
     )
     return portfolio
 
 
-def make_frequency_portfolio(frequency, offset, exposures, sd, ed, **kwargs):
-    portfolio = FixedFrequencyPortfolio(
-        frequency, offset, exposures=exposures, start_date=sd, end_date=ed,
-        **kwargs
+def make_frequency_portfolio(frequency, offset, exposures, sd, ed, capital,
+                             holidays=None):
+    rebal_dts = get_fixed_frequency_rebalance_dates(
+        sd, ed, frequency, offset
+    )
+    wts = {}
+    exchanges = exposures.meta_data.loc["exchange", :].unique()
+    mtm_dates = get_mtm_dates(sd, ed, exchanges, holidays=holidays)
+    portfolio = Portfolio(
+        exposures, rebal_dts, mtm_dates, wts, initial_capital=capital
     )
     return portfolio
 
 
 def make_signal(portfolio):
     asts = portfolio.future_generics + portfolio.equities
-    dates = portfolio.rebalance_dates()
+    dates = portfolio.rebalance_dates
     signal = pd.DataFrame(1, index=dates, columns=asts)
     return signal
 

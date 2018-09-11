@@ -1,17 +1,12 @@
 import pandas as pd
-from pandas.tseries.holiday import AbstractHolidayCalendar
-from pandas.tseries.offsets import CustomBusinessDay
 import numpy as np
 import os
 import mapping as mp
 import json
 import functools
 import collections
-import datetime
 import re
 import warnings
-import pandas_market_calendars as mcal
-from abc import ABCMeta, abstractmethod
 
 # control data warnings in object instantation, see
 # https://docs.python.org/3/library/warnings.html#the-warnings-filter
@@ -513,88 +508,75 @@ class Exposures():
         return p
 
 
-class Portfolio(metaclass=ABCMeta):
+def validate_weights_and_rebalances(instrument_weights, rebalance_dates):
+    """
+    Validate that the rebalance dates are compatible with the instrument
+    weights by checking that the set of roll periods implied by the instrument
+    weights are contained in the rebalance dates. Raise a ValueError if not
+    compatible.
+
+    Parameters
+    ----------
+    instrument_weights: dictionary
+        Dictionary of DataFrames of instrument weights for each root
+        generic defining roll rules.
+    rebalance_dates: pd.DatetimeIndex
+            Dates on which to rebalance
+    """
+
+    # relates to Relates to https://github.com/matthewgilbert/strategy/issues/3
+    # validate that transitions in instrument weights are in rebal_dates
+    for root_generic in instrument_weights:
+        wts = instrument_weights[root_generic]
+        wts = wts.sort_index().reset_index(level="contract")
+        # check if underlying transition matrix is different
+        trans = (wts.groupby("date").apply(lambda x: x.values))
+        trans_next = trans.shift(-1).ffill()
+        changes = ~np.vectorize(np.array_equal)(trans, trans_next)
+        instr_dts = wts.index.unique()
+        chng_dts = instr_dts[changes]
+        invalid_dates = chng_dts.difference(rebalance_dates)
+        if not invalid_dates.empty:
+            msg = ("instrument_weights['{0}'] has transition on dates "
+                   "which are not rebalance dates:\n{1}"
+                   .format(root_generic, invalid_dates))
+            raise ValueError(msg)
+
+
+class Portfolio():
     """
     A Class to manage simulating and generating trades for a trading strategy
     on futures and equities. The main features include:
         - simulations for trading in notional or discrete instrument size
         - user defined roll rules
-        - managing instrument holiday calendars
     """
 
-    def __init__(self, exposures, start_date, end_date,
-                 initial_capital=100000, get_calendar=None, holidays=None):
+    def __init__(self, exposures, rebalance_dates, mtm_dates,
+                 instrument_weights, initial_capital=100000):
         """
         Parameters:
         -----------
         exposures: Exposures
             An Exposures instance containing the asset exposures for trading
             and backtesting
-        start_date: pandas.Timestamp
-            First allowable date when running portfolio simulations
-        end_date: pandas.Timestamp
-            Last allowable date when running portfolio simulations
+        rebalance_dates: pd.DatetimeIndex
+            Dates on which to rebalance
+        mtm_dates: pd.DatetimeIndex
+            Dates on which to mark to market the portfolio
+        instrument_weights: dictionary
+            Dictionary of DataFrames of instrument weights for each root
+            generic defining roll rules.
         initial_capital: float
             Starting capital for backtest
-        get_calendar: function
-            Map which takes an exchange name as a string and returns an
-            instance of a pandas_market_calendars.MarketCalendar. Default is
-            pandas_market_calendars.get_calendar
-        holidays: list
-            list of timezone aware pd.Timestamps used for holidays in addition
-            to exchange holidays associated with instruments
         """
 
         self._exposures = exposures
-        self._start_date = pd.Timestamp(start_date)
-        self._end_date = pd.Timestamp(end_date)
         self._capital = initial_capital
 
-        if get_calendar is None:
-            get_calendar = mcal.get_calendar
-
-        calendars = []
-        calendar_schedules = {}
-        for exchange in exposures.meta_data.loc["exchange"].unique():
-            calendar = get_calendar(exchange)
-            calendars.append(calendar)
-            calendar_schedules[exchange] = calendar.schedule(self._start_date,
-                                                             self._end_date)
-
-        # warn user when price data does not exist for dates which are not
-        # known to be exchange holidays, likely an indicator of spotty price
-        # data source. This will throw warnings even if user defined adhoc
-        # holidays for dates with no pricing
-        for ast, exch in exposures.meta_data.loc["exchange"].items():
-            try:
-                ast_dts = exposures.prices[ast].index.levels[0]
-            except AttributeError:
-                ast_dts = exposures.prices[ast].index
-            exch_dts = calendar_schedules[exch].index
-            missing_dts = exch_dts.difference(ast_dts)
-
-            # warn the user if instantiating instance with instruments which
-            # don't have price data consistent with given calendars
-            warning = ""
-            if len(missing_dts) > 0:
-                warning = (warning + "Generic instrument {0} on exchange {1} "
-                           "missing price data for tradeable calendar dates:\n"
-                           "{2}\n".format(ast, exch, missing_dts))
-            if warning:
-                with warnings.catch_warnings():
-                    warnings.simplefilter(WARNINGS)
-                    warnings.warn(warning)
-
-        if holidays:
-            calendar = _AdhocExchangeCalendar(holidays)
-            calendars.append(calendar)
-            calendar_schedules["adhoc"] = calendar.schedule(self._start_date,
-                                                            self._end_date)
-
-        self._calendars = calendars
-        # this is stored as an optimization to avoid having to call
-        # calendar.schedule() again on self._calendars
-        self._calendar_schedules = calendar_schedules
+        validate_weights_and_rebalances(instrument_weights, rebalance_dates)
+        self._rebalance_dates = rebalance_dates
+        self._mtm_dates = mtm_dates
+        self._instrument_weights = instrument_weights
 
     def __repr__(self):
         return (
@@ -606,7 +588,7 @@ class Portfolio(metaclass=ABCMeta):
             "Start: {2}\n"
             "End: {3}\n"
         ).format(self._capital, self._exposures,
-                 self._start_date, self._end_date)
+                 self._rebalance_dates[0], self._rebalance_dates[-1])
 
     @property
     def equities(self):
@@ -621,63 +603,6 @@ class Portfolio(metaclass=ABCMeta):
         Return tuple of generic futures defined in portfolio
         """
         return self._exposures.future_generics
-
-    def tradeable_dates(self, how='all'):
-        """
-        Dates which are tradeable based on the calendars for the exchanges that
-        the set of instruments in the portfolio trade on.
-
-        Parameters:
-        -----------
-            how: {'all', 'any'}, default 'all'
-               * all: all instruments must be tradeable for date to be included
-               * any: any instrument must be tradeable for date to be included
-
-        Returns:
-        --------
-        DatetimeIndex of tradeable dates
-        """
-
-        how = {"all": "inner", "any": "outer"}[how]
-
-        sched = self.schedule(how)
-        return sched.index
-        # schedule_dates = mcal.date_range(sched, frequency='1D')
-        # return schedule_dates
-
-    def schedule(self, how="inner"):
-        """
-        Merge schedule DataFrames from instrument calendars
-
-        how: {'outer', 'inner'}
-            How to merge calendars, see pandas_market_calendars.merge_schedules
-
-        Returns:
-        --------
-        pandas.DataFrame schedule
-        """
-        return self._schedule(how)
-
-    @functools.lru_cache()
-    def _schedule(self, how):
-        schedules = list(self._calendar_schedules.values())
-        return mcal.merge_schedules(schedules, how=how)
-
-    def holidays(self):
-        """
-        pd.CumstomBusinessDay of union of all holidays for underlying calendars
-        """
-        adhoc_holidays = []
-        calendar = AbstractHolidayCalendar()
-        for cal in self._calendars:
-            adhoc_holidays = np.union1d(adhoc_holidays, cal.adhoc_holidays)
-            calendar = AbstractHolidayCalendar(
-                rules=calendar.merge(cal.regular_holidays)
-            )
-        return CustomBusinessDay(
-            holidays=adhoc_holidays.tolist(),
-            calendar=calendar
-        )
 
     def _split_and_check_generics(self, generics):
         if isinstance(generics, pd.Series):
@@ -713,35 +638,40 @@ class Portfolio(metaclass=ABCMeta):
 
         return instruments.loc[futs], instruments.loc[eqts]
 
-    @abstractmethod
+    @property
     def rebalance_dates(self):
         """
-        Rebalance days for trading strategy
+        Rebalance days for trading strategy.
 
         Returns
         -------
         pandas.DatetimeIndex
         """
-        raise NotImplementedError()
+        return self._rebalance_dates
 
-    @abstractmethod
-    def instrument_weights(self, dates=None):
+    @property
+    def mtm_dates(self):
+        """
+        Days for marking to market trading strategy.
+
+        Returns:
+        --------
+        pandas.DatetimeIndex
+        """
+        return self._mtm_dates
+
+    @property
+    def instrument_weights(self):
         """
         Dictionary of instrument weights for each root generic defining roll
         rules for given dates.
-
-        Parameters:
-        -----------
-        dates: iterable
-            iterable of pandas.Timestamps, if None then self.tradeable_dates()
-            is used.
 
         Returns
         -------
         A dictionary of DataFrames of instrument weights indexed by root
         generic, see mapper.mappings.roller()
         """
-        raise NotImplementedError()
+        return self._instrument_weights
 
     def generic_durations(self):
         """
@@ -750,7 +680,7 @@ class Portfolio(metaclass=ABCMeta):
 
         See also: mapping.util.weighted_expiration()
         """
-        wts = self.instrument_weights()
+        wts = self.instrument_weights
         ltd = self._exposures.expiries.set_index("contract").loc[:, "last_trade"]  # NOQA
         durations = {}
         for generic in wts:
@@ -770,7 +700,7 @@ class Portfolio(metaclass=ABCMeta):
         """
         irets = {}
         if len(self._exposures.root_futures) > 0:
-            weights = self.instrument_weights()
+            weights = self.instrument_weights
 
         for ast in self._exposures.root_futures:
             widx = weights[ast].index
@@ -796,33 +726,14 @@ class Portfolio(metaclass=ABCMeta):
 
         crets = pd.concat([futures_crets, equity_rets], axis=1)
         crets = crets.sort_index(axis=1)
-        return crets.loc[self.tradeable_dates(), :]
-
-    @staticmethod
-    def _validate_weights_and_rebalances(weights, rebalance_dates):
-        # validate that transitions in instrument weights are in rebal_dates
-        for root_generic in weights:
-            wts = weights[root_generic]
-            wts = wts.sort_index().reset_index(level="contract")
-            # check if underlying transition matrix is different
-            trans = (wts.groupby("date").apply(lambda x: x.values))
-            trans_next = trans.shift(-1).ffill()
-            changes = ~np.vectorize(np.array_equal)(trans, trans_next)
-            instr_dts = wts.index.unique()
-            chng_dts = instr_dts[changes]
-            invalid_dates = chng_dts.difference(rebalance_dates)
-            if not invalid_dates.empty:
-                msg = ("{0} has instrument weights which transition on dates "
-                       "which are not rebalance dates:\n{1}"
-                       .format(root_generic, invalid_dates))
-                raise ValueError(msg)
+        return crets.loc[self.mtm_dates, :]
 
     def simulate(self, signal, tradeables=False, rounder=None,
                  reinvest=True, risk_target=0.12):
         """
         Simulate trading strategy with or without discrete trade sizes and
         revinvested. Holdings are marked to market for each day in
-        tradeable_dates().
+        mtm_dates.
 
         Parameters
         ----------
@@ -856,7 +767,7 @@ class Portfolio(metaclass=ABCMeta):
 
         # validate signal data prior to running a simulation, avoid slow
         # runtime error
-        rebal_dates = self.rebalance_dates()
+        rebal_dates = self.rebalance_dates
         missing = ~rebal_dates.isin(signal.index)
         if missing.any():
             raise ValueError("'signal' must contain values for "
@@ -882,9 +793,6 @@ class Portfolio(metaclass=ABCMeta):
                                  "not NaN, {0} needs prices for:"
                                  "\n{1}\n".format(ast, req_price_dts[~isin]))
 
-        weights = self.instrument_weights()
-        self._validate_weights_and_rebalances(weights, rebal_dates)
-
         returns = self.continuous_rets()
         capital = self._capital
 
@@ -895,7 +803,7 @@ class Portfolio(metaclass=ABCMeta):
         returns = returns.fillna(value=0)
         pnls = []
         crnt_instrs = 0
-        tradeable_dates = self.tradeable_dates()
+        tradeable_dates = self.mtm_dates
         for i, dt in enumerate(tradeable_dates):
             # exposure from time dt - 1
             daily_pnl = (current_exp * returns.loc[dt]).sum()
@@ -918,10 +826,10 @@ class Portfolio(metaclass=ABCMeta):
                     # see https://github.com/matthewgilbert/strategy/issues/1
                     dt_next = tradeable_dates[i + 1]
                     trds = self.trade(dt_next, crnt_instrs, sig_t, prices_t,
-                                      capital, risk_target, rounder, weights)
+                                      capital, risk_target, rounder)
 
                     new_exp = self.notional_exposure(dt_next, crnt_instrs,
-                                                     trds, prices_t, weights)
+                                                     trds, prices_t)
                     # account for fact that 'trds' mapped to 'new_exp'
                     # (generic notionals) might not span all previous generic
                     # holdings, which should be interpreted as having 0
@@ -956,7 +864,7 @@ class Portfolio(metaclass=ABCMeta):
         return container(notional_exposures, trades, pnls)
 
     def trade(self, date, instrument_holdings, unit_risk_exposures, prices,
-              capital, risk_target, rounder=None, weights=None):
+              capital, risk_target, rounder=None):
         """
         Generate instrument trade list.
 
@@ -978,12 +886,6 @@ class Portfolio(metaclass=ABCMeta):
         rounder: function
             Function to round pd.Series contracts to integers, if None default
             pd.Series.round is used.
-        weights: dict
-            A dict of DataFrames of instrument weights with a MultiIndex where
-            the top level contains pandas.Timestamps and the second level is
-            instrument names. The columns consist of generic names. Keys should
-            be for different root generics, e.g. 'ES'
-
 
         Returns:
         --------
@@ -993,8 +895,9 @@ class Portfolio(metaclass=ABCMeta):
         if rounder is None:
             rounder = pd.Series.round
 
-        if weights is None:
-            weights = self.instrument_weights(pd.DatetimeIndex([date]))
+        weights = {}
+        for root in self.instrument_weights:
+            weights[root] = self.instrument_weights[root].loc[[date], :]
 
         # to support passing 0 as a proxy to all empty holdings
         if isinstance(instrument_holdings, pd.Series):
@@ -1026,7 +929,7 @@ class Portfolio(metaclass=ABCMeta):
         return pd.concat([eq_trades, fut_trds])
 
     def notional_exposure(self, date, current_instruments, instrument_trades,
-                          prices, weights=None):
+                          prices):
         """
         Return generic dollar notional exposures.
 
@@ -1041,18 +944,14 @@ class Portfolio(metaclass=ABCMeta):
             Instrument trades as integer number of contracts
         prices: pandas.Series
             Prices for instruments to be traded
-        weights: dict
-            A dict of DataFrames of instrument weights with a MultiIndex where
-            the top level contains pandas.Timestamps and the second level is
-            instrument names. The columns consist of generic names. Keys should
-            be for different root generics, e.g. 'ES'
 
         Returns:
         --------
         pd.Series of notional exposures for generic instruments.
         """
-        if weights is None:
-            weights = self.instrument_weights(pd.DatetimeIndex([date]))
+        weights = {}
+        for root in self.instrument_weights:
+            weights[root] = self.instrument_weights[root].loc[[date], :]
 
         if not instrument_trades.index.is_unique:
             raise ValueError('instrument_trades must have unique index')
@@ -1108,40 +1007,3 @@ class Portfolio(metaclass=ABCMeta):
 
         trades.index = new_index
         return trades
-
-
-class _AdhocExchangeCalendar(mcal.MarketCalendar):
-    """
-    Dummy exchange calendar for storing adhoc holidays not associated with any
-    particular exchange
-    """
-
-    def __init__(self, adhoc_holidays, *args, **kwargs):
-        # adhoc_holidays should be a list-like of pandas.Timestamps for
-        # holidays
-        super(_AdhocExchangeCalendar, self).__init__(*args, **kwargs)
-        self._adhoc_holidays = tuple(adhoc_holidays)
-
-    @property
-    def name(self):
-        return "Adhoc"
-
-    @property
-    def tz(self):
-        return "UTC"
-
-    @property
-    def adhoc_holidays(self):
-        return list(self._adhoc_holidays)
-
-    @property
-    def regular_holidays(self):
-        return AbstractHolidayCalendar()
-
-    @property
-    def open_time_default(self):
-        return datetime.time(17, 1)
-
-    @property
-    def close_time_default(self):
-        return datetime.time(17)
